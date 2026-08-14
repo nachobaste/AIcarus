@@ -1,6 +1,8 @@
-# devbrain — a Telegram-driven, propose-only dev automation starter kit
+# AIcarus — a Telegram-driven, propose-only dev automation starter kit
 
-devbrain lets you chat with your own projects over Telegram, have a cheap LLM turn
+AIcarus (internally, the tooling still goes by its original name, "devbrain" — you'll
+see `devbrain-*` throughout the scripts and docs below) lets you chat with your own
+projects over Telegram, have a cheap LLM turn
 that chat into queued work items, and have a more capable coding agent pick up
 *approved* items overnight — always on a feature branch, always as a pull request,
 never merged without you. It's the "starter kit" version of a system one person
