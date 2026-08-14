@@ -169,5 +169,6 @@ say. Write your own.
 
 ## License
 
-No license file is included by default — add one that matches how you want this
+MIT — see [`LICENSE`](LICENSE). Fork it, adapt it, point it at your own repos.
+No attribution required beyond what MIT already asks for.
 starter kit's code treated once you publish your own fork.
