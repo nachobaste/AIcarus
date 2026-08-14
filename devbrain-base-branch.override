@@ -1,0 +1,10 @@
+# Per-project override of the base branch `devbrain execute` uses (instead of the
+# repo's actual git default branch). One `project=branch` per line.
+# Adding a line here is a deliberate act, same convention as devbrain-projects.allow.
+#
+# Use this when you want devbrain's PRs to land on a staging/preview branch instead
+# of your real default branch, and you promote that branch to production yourself
+# as a separate, deliberate step.
+#
+# Example (remove the leading '#' to enable):
+# example-repo=develop

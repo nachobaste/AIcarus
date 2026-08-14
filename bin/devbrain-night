@@ -1,0 +1,156 @@
+#!/bin/bash
+# devbrain-night — nightly autonomous runner: approved queue plans -> devbrain execute -> PR.
+# NEVER merges. Serial (one Claude session at a time). Telegram is NOT in the
+# critical path: alerts leave via direct curl (lib/telegram.sh), independent of
+# whatever messaging bridge you use.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/lib/queue.sh"
+source "$ROOT/lib/telegram.sh"
+QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"
+DEVBRAIN="${DEVBRAIN_BIN:-$ROOT/bin/devbrain}"
+PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
+REPORT="$QUEUE_DIR/night-report-latest.md"
+LOG="${DEVBRAIN_NIGHT_LOG:-$HOME/.openclaw/logs/night.log}"
+log() { echo "[$(date)] $*" >> "$LOG"; }
+
+# This devbrain installation's own directory name (e.g. "machine-config",
+# "devbrain", whatever you cloned this repo as). Used below to refuse a queue
+# plan that names devbrain's own repo — structural, not a hardcoded name, so it
+# works no matter what you called your checkout.
+SELF_REPO_NAME="$(basename "$ROOT")"
+
+in_window() { # 23:00-05:59, or forced (tests / a manual SSH run)
+  [ "${DEVBRAIN_NIGHT_FORCE:-0}" = "1" ] && return 0
+  local h; h=$(date +%H)
+  [ "$h" -ge 23 ] || [ "$h" -lt 6 ]
+}
+
+if ! in_window; then
+  echo "Outside the night window (23:00-06:00). Use DEVBRAIN_NIGHT_FORCE=1 to force."; exit 0
+fi
+
+# Single-instance lock: a manual/forced run and the scheduled run must never
+# overlap (they'd race on the queue and on each project's .devbrain staging).
+# mkdir is atomic; the lock lives with the queue it guards.
+LOCK="$QUEUE_DIR/.night.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  log "another devbrain-night holds the lock ($LOCK); exiting"
+  echo "Another devbrain-night instance is running (lock: $LOCK). Exiting."
+  exit 0
+fi
+
+trap 'code=$?; rmdir "$LOCK" 2>/dev/null; [ $code -ne 0 ] && tg_send "🚨 devbrain-night crashed (code $code). The queue is unchanged; nothing touched main. See night.log."' EXIT
+
+# Stale-running recovery: if a previous runner died (kill, crash, power), its plan
+# stays 'running' forever and every later night would silently skip it. No
+# auto-retry by design — mark it failed and let the weekly interview decide.
+for f in "$QUEUE_DIR"/*.plan.md; do
+  [ -e "$f" ] || continue
+  if [ "$(fm_get "$f" status)" = "running" ]; then
+    fm_set "$f" status failed
+    fm_set "$f" motivo_fallo "stale running: the previous runner died without closing out the task"
+    log "stale running -> failed: $(basename "$f")"
+  fi
+done
+queue_commit_and_push "$QUEUE_DIR" "queue: stale-running recovery $(date +%Y-%m-%d)"
+
+next_plan() { # prints path of lowest-NN plan with status approved AND an aprobado: date
+  local f
+  for f in "$QUEUE_DIR"/*.plan.md; do
+    [ -e "$f" ] || continue
+    [ "$(fm_get "$f" status)" = "approved" ] || continue
+    [ -n "$(fm_get "$f" aprobado)" ] || continue
+    echo "$f"; return 0
+  done
+  return 1
+}
+
+plan_body() { # strip frontmatter
+  awk 'NR==1 && $0=="---" {infm=1; next} infm==1 && $0=="---" {infm=2; next} infm==2 {print}' "$1"
+}
+
+DONE=0; FAILED=0; BLOCKED=0; SUMMARY=""
+{ echo "# Night report — $(date '+%Y-%m-%d %H:%M')"; echo ""; } > "$REPORT"
+log "night start"
+
+while in_window && PLAN=$(next_plan); do
+  BASE=$(basename "$PLAN"); REPO=$(fm_get "$PLAN" repo)
+  log "running $BASE"
+
+  # This devbrain installation's own repo (whatever it's actually called locally)
+  # is devbrain's own code plus the messaging bridge's security allowlist (what an
+  # unattended agent is allowed to run). Letting devbrain-night touch it means a
+  # nightly loop could modify its own permissions with nobody watching — so it's
+  # deliberately excluded from autonomous execution. It typically doesn't even live
+  # under $PROJECTS_DIR, which used to surface as a confusing "repo doesn't exist"
+  # failure; this makes the real reason explicit instead.
+  if [ "$REPO" = "$SELF_REPO_NAME" ]; then
+    fm_set "$PLAN" status paused
+    fm_set "$PLAN" motivo_fallo "$SELF_REPO_NAME is not run unattended: it needs an interactive session, human present. See devbrain-projects.excluded."
+    log "skip (self-repo, interactive-only): $BASE"
+    { echo "- ⏭️  $BASE — $SELF_REPO_NAME: waiting on an interactive session (not run at night)"; } >> "$REPORT"
+    queue_commit_and_push "$QUEUE_DIR" "queue: pause $BASE (self-repo interactive-only)"
+    continue
+  fi
+
+  fm_set "$PLAN" status running
+  DIR="$PROJECTS_DIR/$REPO"
+  if [ ! -d "$DIR" ]; then
+    fm_set "$PLAN" status failed; fm_set "$PLAN" motivo_fallo "project dir not found"
+    FAILED=$((FAILED+1)); SUMMARY="$SUMMARY\n❌ $BASE (repo does not exist)"
+    { echo "- ❌ $BASE — repo does not exist"; } >> "$REPORT"
+    queue_commit_and_push "$QUEUE_DIR" "queue: fail $BASE (repo does not exist)"
+    continue
+  fi
+  mkdir -p "$DIR/.devbrain"
+  plan_body "$PLAN" > "$DIR/.devbrain/plan-latest.md"
+  plan_body "$PLAN" | grep -v '^#' | grep -v '^$' | head -1 > "$DIR/.devbrain/task-latest.txt"
+  [ -s "$DIR/.devbrain/task-latest.txt" ] || echo "$BASE" > "$DIR/.devbrain/task-latest.txt"
+
+  OUT=$("$DEVBRAIN" execute "$REPO" 2>&1); RC=$?
+  echo "$OUT" >> "$LOG"
+
+  # Checked BEFORE the RC==0 / quota / failed chain, and by the FILE, not by exit
+  # code alone: the file is the evidence, and it is what devbrain-day and
+  # bin/devbrain already share as the single reader (lib/queue.sh's
+  # queue_blocked_command) — this can never disagree with them about what counts
+  # as blocked.
+  BLOCKED_CMD="$(queue_blocked_command "$DIR")"
+  if [ -n "$BLOCKED_CMD" ]; then
+    fm_set "$PLAN" status blocked
+    fm_set "$PLAN" bloqueado_por "$BLOCKED_CMD"
+    BLOCKED=$((BLOCKED+1)); SUMMARY="$SUMMARY\n🚧 $BASE — missing: $BLOCKED_CMD"
+    { echo "- 🚧 $BASE — blocked, missing: \`$BLOCKED_CMD\`"; } >> "$REPORT"
+    queue_commit_and_push "$QUEUE_DIR" "queue: blocked $BASE ($BLOCKED_CMD)"
+    tg_send "🚧 Task blocked: $BASE needs \`$BLOCKED_CMD\`. Add it to devbrain-verify.commands and re-approve the plan to retry — it does not retry on its own."
+  elif [ $RC -eq 0 ]; then
+    PR=$(echo "$OUT" | sed -n 's/^PR ready for review: //p' | tail -1)
+    fm_set "$PLAN" status done; [ -n "$PR" ] && fm_set "$PLAN" pr "$PR"
+    DONE=$((DONE+1)); SUMMARY="$SUMMARY\n✅ $BASE → ${PR:-PR}"
+    { echo "- ✅ $BASE → ${PR:-(no URL)}"; } >> "$REPORT"
+    queue_commit_and_push "$QUEUE_DIR" "queue: done $BASE${PR:+ -> $PR}"
+  elif echo "$OUT" | grep -qiE 'usage limit|rate limit|5-hour|session limit|hit your.*limit|resets [0-9]'; then
+    # Quota window exhausted: put the plan back and sleep until the next window (or cutoff).
+    fm_set "$PLAN" status approved
+    log "quota limit hit; sleeping ${DEVBRAIN_QUOTA_PAUSE:-5400}s"
+    { echo "- ⏸️ quota limit; pausing"; } >> "$REPORT"
+    queue_commit_and_push "$QUEUE_DIR" "queue: quota pause $BASE"
+    in_window || break
+    sleep "${DEVBRAIN_QUOTA_PAUSE:-5400}"
+  else
+    fm_set "$PLAN" status failed
+    fm_set "$PLAN" motivo_fallo "exit $RC: $(echo "$OUT" | tail -1 | cut -c1-160)"
+    FAILED=$((FAILED+1)); SUMMARY="$SUMMARY\n❌ $BASE"
+    { echo "- ❌ $BASE — exit $RC"; } >> "$REPORT"
+    queue_commit_and_push "$QUEUE_DIR" "queue: fail $BASE (exit $RC)"
+    tg_send "🌙❌ Night task failed: $BASE (code $RC). The run continues with the next one. Nothing touched main."
+  fi
+done
+
+{ echo ""; echo "Total: $DONE PRs, $FAILED failures, $BLOCKED blocked."; } >> "$REPORT"
+queue_commit_and_push "$QUEUE_DIR" "queue: night report $(date +%Y-%m-%d) — $DONE done, $FAILED failed, $BLOCKED blocked"
+log "night end: $DONE done, $FAILED failed, $BLOCKED blocked"
+[ $((DONE+FAILED+BLOCKED)) -gt 0 ] && tg_send "🌙 Night finished: $DONE PRs ready to review, $FAILED failures, $BLOCKED blocked.$(printf '%b' "$SUMMARY" | head -8)"
+exit 0

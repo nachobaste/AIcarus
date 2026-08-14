@@ -1,0 +1,296 @@
+#!/bin/bash
+# devbrain — the ONLY command the Telegram-facing agent is allowed to execute.
+# Two modes: plan (propose only, touches nothing) and execute (branch -> PR).
+# Design: see README.md (propose-only loop). Version-controlled alongside this repo.
+# Model split: a cheaper/faster model for planning, a stronger one for execution is
+# one reasonable choice — adjust --model below to whatever split fits your budget.
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
+HOUSE_RULES="${DEVBRAIN_HOUSE_RULES:-$HOME/dev/CLAUDE.md}"
+# Hard guardrail: allowlist (not denylist) of projects devbrain may touch.
+# Adding a repo here is meant to be a deliberate act by you, the owner — see
+# devbrain-projects.allow. Per-repo extra safeguards (like the migration block
+# below) are config-driven, not hardcoded to any particular repo name.
+#
+# Each config path below is overridable via its own env var. That's not just
+# for tests: it's the same "explicit variable, sane default" convention used
+# throughout this repo (DEVBRAIN_QUEUE_DIR, DEVBRAIN_WIKI_DIR, etc.) so the
+# whole thing also works from a non-standard layout, not only for isolating
+# fixtures in tests/*.sh.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ALLOWFILE="${DEVBRAIN_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
+BASE_BRANCH_OVERRIDE_FILE="${DEVBRAIN_BASE_BRANCH_OVERRIDE_FILE:-$ROOT/devbrain-base-branch.override}"
+VERIFY_COMMANDS_FILE="${DEVBRAIN_VERIFY_COMMANDS_FILE:-$ROOT/devbrain-verify.commands}"
+MIGRATION_BLOCK_FILE="${DEVBRAIN_MIGRATION_BLOCK_FILE:-$ROOT/devbrain-migration-block.list}"
+source "$ROOT/lib/queue.sh"     # with_timeout
+
+usage() { echo "usage: devbrain plan <project> \"<task>\" | devbrain execute <project> | devbrain projects"; exit 1; }
+
+# Per-project verification commands (build, lint, typecheck, a known script) that an
+# unattended session may run on code already in the repo. Emits them as extra
+# --allowedTools entries, e.g. ",Bash(npm run build),Bash(npm run lint)". Empty for
+# every project without a line, which is most of them.
+#
+# `|| true` is not defensive style, it is a lived regression. grep exits 1 when the
+# project has no line, and under `set -e`+`pipefail` that silently took down most
+# nightly tasks the first time a repo WITHOUT an override ran in execute mode —
+# invisible until then, because only the one repo that DID have an override had ever
+# exercised this code path. Same lesson applies to the base-branch lookup below.
+verify_tools_for() {
+  local project="$1" raw entry cmd subdir
+  raw="$(grep -v '^#' "$VERIFY_COMMANDS_FILE" 2>/dev/null | grep "^${project}=" | cut -d= -f2- || true)"
+  [ -z "$raw" ] && return 0
+  # `printf '%s\n'` (not '%s'): without the trailing newline `read` drops the LAST
+  # field, so a repo declaring two commands would silently get only the first.
+  # Caught by tests/test-devbrain-verify-commands.sh, not by reading this code.
+  printf '%s\n' "$raw" | tr ',' '\n' | while read -r entry; do
+    entry="$(printf '%s' "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -z "$entry" ] && continue
+    if [[ "$entry" == *"@"* ]]; then
+      cmd="${entry%%@*}"
+      subdir="${entry#*@}"
+      # Reject noisily (stderr — this runs inside a `$(...)` capture, so stdout
+      # becomes part of the --allowedTools string and must stay clean), never
+      # silently: an absolute path or a `..` segment is a repo config trying to
+      # `cd` outside the repo it is supposed to verify.
+      case "$subdir" in
+        /*)
+          echo "verify_tools_for: absolute subdir rejected for '$project': '$subdir' (outside the repo, entry ignored)" >&2
+          continue
+          ;;
+      esac
+      case "/$subdir/" in
+        */../*|*/./*|*//*)
+          echo "verify_tools_for: subdir with '..' rejected for '$project': '$subdir' (could escape the repo, entry ignored)" >&2
+          continue
+          ;;
+      esac
+      [ -z "$subdir" ] && { echo "verify_tools_for: '@' with no subdir for '$project' in '$entry' (entry ignored)" >&2; continue; }
+      printf ',Bash(cd %s && %s)' "$subdir" "$cmd"
+    else
+      printf ',Bash(%s)' "$entry"
+    fi
+  done
+}
+
+# Direct send to Telegram (curl to the API). Deliberately does NOT go through the
+# messaging bridge's own "send message" command: doing that mid-turn interferes with
+# delivery of the agent's own final turn message. Only used when there's no terminal
+# attached (run by the bridge; over an interactive SSH session it just prints).
+source "$ROOT/lib/telegram.sh"
+ack() { tg_send "$1"; }
+tg_alert() { tg_send "$1"; }
+
+# Notify on any non-zero exit before dying. Armed inside plan/execute.
+MODE_LABEL=""
+on_fail() {
+  local code=$?
+  [ "$code" -eq 0 ] && return 0
+  tg_alert "🚨 devbrain failed (code $code) during ${MODE_LABEL:-task}. Nothing touched your data or production; the work is left on a local branch. Review or retry."
+}
+
+[ $# -ge 1 ] || usage
+MODE="$1"
+
+if [ "$MODE" = "projects" ]; then
+  ls -1 "$PROJECTS_DIR" 2>/dev/null || echo "(no projects yet)"
+  exit 0
+fi
+
+# Inspection helper, and what the tests exercise: prints the extra --allowedTools
+# entries a project would get from devbrain-verify.commands (empty for most).
+# Keeps the tests from having to duplicate verify_tools_for, which would mean
+# testing a copy instead of the real thing.
+if [ "$MODE" = "verify-tools" ]; then
+  [ $# -ge 2 ] || usage
+  verify_tools_for "$2"; echo
+  exit 0
+fi
+
+[ $# -ge 2 ] || usage
+PROJECT="$2"
+# Failure notification is active from here on (covers validation, plan, and execute).
+MODE_LABEL="$MODE of $PROJECT"; trap on_fail EXIT
+
+# --- validation ---------------------------------------------------------------
+if ! [[ "$PROJECT" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "ERROR: invalid project name: $PROJECT"; exit 2
+fi
+if ! grep -v '^#' "$ALLOWFILE" 2>/dev/null | grep -qxF "$PROJECT"; then
+  echo "ERROR: $PROJECT is not in the devbrain allowlist ($ALLOWFILE). Add it explicitly, on purpose."; exit 3
+fi
+DIR="$PROJECTS_DIR/$PROJECT"
+if [ ! -d "$DIR" ]; then
+  echo "ERROR: project not found: $PROJECT. Known projects:"; ls -1 "$PROJECTS_DIR"; exit 4
+fi
+if ! git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "ERROR: $PROJECT is not a git repository."; exit 5
+fi
+cd "$DIR"
+mkdir -p .devbrain
+if ! grep -qxF ".devbrain/" .gitignore 2>/dev/null; then
+  echo ".devbrain/" >> .gitignore
+  git add .gitignore && git commit -q -m "chore: ignore .devbrain scratch dir" || true
+fi
+
+case "$MODE" in
+# --- PLAN: read-only, produces a short plan -------------------------------------
+plan)
+  [ $# -ge 3 ] || usage
+  TASK="$3"
+  MODE_LABEL="the plan for \"$3\" ($PROJECT)"; trap on_fail EXIT
+  ack "⏳ Got it. Looking at the code and putting together a plan — reply in ~1 min."
+  printf '%s\n' "$TASK" > .devbrain/task-latest.txt
+  # Restricted allowedTools + explicit deny of ALL MCP tools: coding sessions never
+  # touch personal connectors (email/calendar/etc). Keeps that data-leak surface
+  # closed entirely, on every plan/execute call, not just by policy.
+  # The PROMPT goes via stdin: --disallowedTools is variadic and would swallow the
+  # prompt if it were passed as a trailing argument instead.
+  {
+    printf 'Read the house rules at %s. Task requested via Telegram: "%s".\n' "$HOUSE_RULES" "$TASK"
+    printf 'Explore the code as needed and produce a SHORT PLAN (max ~150 words, list format) for a guided beginner:\n'
+    printf '1) which files you will touch, 2) what changes, 3) risks, 4) how to verify it.\n'
+    printf 'Do NOT modify anything. Respond ONLY with the plan.\n'
+  } | with_timeout 900 claude -p --model opus --permission-mode plan \
+    --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)" \
+    --allowedTools "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(rg:*)" \
+    | tee .devbrain/plan-latest.md
+  echo ""
+  echo "---"
+  echo "Plan saved. To execute: devbrain execute $PROJECT"
+  ;;
+
+# --- EXECUTE: implements the stored plan on a branch, opens a PR ---------------
+execute)
+  if [ ! -f .devbrain/plan-latest.md ] || [ ! -f .devbrain/task-latest.txt ]; then
+    echo "ERROR: no stored plan. Run: devbrain plan $PROJECT \"<task>\" first."; exit 6
+  fi
+  TASK="$(cat .devbrain/task-latest.txt)"
+  MODE_LABEL="execution of \"$TASK\" ($PROJECT)"; trap on_fail EXIT
+  ack "🛠️ Executing on $PROJECT: \"$TASK\". Takes a few minutes — I'll ping the PR link. (If this is NOT what you asked for, reply 'cancel'.)"
+  # deterministic scaffolding: clean state, fresh branch off main.
+  # Ignore .devbrain/ in the clean check: it's the scratch dir the runner writes plan/task
+  # files into, and in a repo where those files got committed before .devbrain/ was
+  # gitignored, they always show as modified. That's not real uncommitted work and
+  # must not block execution.
+  if [ -n "$(git status --porcelain | grep -v '\.devbrain/' || true)" ]; then
+    echo "ERROR: working tree not clean in $PROJECT. Resolve manually first."; exit 7
+  fi
+  DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
+  DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+  # Per-project override: some repos want devbrain PRs to land on a branch other than
+  # the repo's actual default (e.g. a `develop` branch, never `main`/production directly).
+  # `|| true`: grep exits 1 when PROJECT has no override line (every repo except the
+  # ones listed). Without it, `set -e`+`pipefail` kills the whole run silently — exactly
+  # the class of bug this file's other `|| true` comments describe.
+  OVERRIDE_BRANCH="$(grep -v '^#' "$BASE_BRANCH_OVERRIDE_FILE" 2>/dev/null | grep "^${PROJECT}=" | cut -d= -f2 || true)"
+  [ -n "$OVERRIDE_BRANCH" ] && DEFAULT_BRANCH="$OVERRIDE_BRANCH"
+  # Branch off ORIGIN's latest base, not the local (possibly stale) one. Checking out
+  # the local base and pulling, ignoring pull failure, can silently proceed off a stale
+  # local base when the pull fails — producing PRs that conflict with real origin.
+  # Fetch first, then branch directly off origin/<base>; fall back to local only if
+  # origin can't be reached (offline).
+  git fetch -q origin "$DEFAULT_BRANCH" 2>/dev/null || true
+  SLUG="$(printf '%s' "$TASK" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | cut -c1-40 | sed 's/^-//;s/-$//')"
+  BRANCH="devbrain/${SLUG}-$(date +%m%d-%H%M)"
+  git checkout -q -b "$BRANCH" "origin/$DEFAULT_BRANCH" 2>/dev/null \
+    || git checkout -q -b "$BRANCH" FETCH_HEAD 2>/dev/null \
+    || { git checkout -q "$DEFAULT_BRANCH" 2>/dev/null || true; git checkout -q -b "$BRANCH"; }
+
+  # Per-repo extra safeguard: some repos hold production data and devbrain should
+  # never be allowed to write database migrations there unattended (app code/docs
+  # are fine, reviewed via PR same as anywhere else; a merged migration is a
+  # different class of risk than merged app code). Config-driven, not hardcoded:
+  # list repo names, one per line, in devbrain-migration-block.list. Empty/absent
+  # by default — no repo is blocked unless you opt it in.
+  EXTRA_DISALLOWED=""
+  if [ -f "$MIGRATION_BLOCK_FILE" ] && grep -v '^#' "$MIGRATION_BLOCK_FILE" 2>/dev/null | grep -qxF "$PROJECT"; then
+    EXTRA_DISALLOWED=",Edit(//${DIR#/}/supabase/migrations/**),Write(//${DIR#/}/supabase/migrations/**)"
+  fi
+
+  # A leftover blocked-by.txt from an earlier, unrelated attempt must never cause a
+  # false positive on this run — clear it before the session can write one.
+  rm -f .devbrain/blocked-by.txt
+
+  {
+    printf 'Read the house rules at %s. You are on branch %s of project %s.\n' "$HOUSE_RULES" "$BRANCH" "$PROJECT"
+    printf 'Approved task: "%s"\nApproved plan:\n' "$TASK"
+    cat .devbrain/plan-latest.md
+    printf '\nImplement the plan. Make small commits with English messages. If the project has tests or a typecheck, run them.\n'
+    printf 'BEFORE working, read every page under ~/dev/wiki/status/ (context on other projects).\n'
+    printf 'WHEN DONE, update ~/dev/wiki/status/%s.md following that directory'"'"'s template.\n' "$PROJECT"
+    printf 'Do NOT push, do NOT touch main, do NOT deploy. At the end, reply with a short summary of what you did.\n'
+    printf 'If you need to run a verification command (build/lint/test/typecheck) and permission denies it, do NOT retry another way and do NOT skip it silently: write the EXACT command you needed into .devbrain/blocked-by.txt (one line, the command exactly as you tried it) and stop your verification there — keep implementing the rest of the plan normally. A human decides whether to grant that permission.\n'
+  } | with_timeout 2700 claude -p --model sonnet --permission-mode acceptEdits \
+    --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)${EXTRA_DISALLOWED}" \
+    --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(npm test:*),Bash(node test.js),Bash(npx tsc:*),Bash(ls:*),Bash(mkdir:*)$(verify_tools_for "$PROJECT")"
+
+  # A blocked session never reaches the PR flow: no partial push, no review, no PR
+  # for work that stopped because a permission was missing. The exact command lands
+  # on the queue plan via devbrain-night, which reads this same file.
+  BLOCKED_CMD="$(queue_blocked_command "$DIR")"
+  if [ -n "$BLOCKED_CMD" ]; then
+    echo "BLOCKED: $BLOCKED_CMD"
+    exit 9
+  fi
+
+  # commit any leftovers, push, open PR (script keeps the deterministic parts)
+  if [ -n "$(git status --porcelain)" ]; then
+    git add -A && git commit -q -m "devbrain: task changes"
+  fi
+  # origin/, not the bare local branch: a stale local base makes an empty branch look
+  # productive — this guard would pass on a branch with no commits of its own just
+  # because the local main was behind, and a reviewer could then reject code that had
+  # already been merged. See tests/test-devbrain-base-comparison.sh.
+  if [ -z "$(git log "origin/$DEFAULT_BRANCH"..HEAD --oneline)" ]; then
+    echo "ERROR: no commits produced; nothing to PR. Branch $BRANCH left for inspection."; exit 8
+  fi
+
+  # --- REVIEW: adversarial verifier before the PR reaches the merge queue ---------
+  # Runs once on the committed diff. Read-only (plan mode), MCP denied, same tier as
+  # planning (the stronger model — this is judgment, not execution). Fail-open: if
+  # the reviewer errors or times out, the PR is STILL created, flagged "NOT REVIEWED"
+  # — never lose the work, just make it obvious a human must look harder. The verdict
+  # goes at the TOP of the PR body and into the Telegram ack, so it's seen before
+  # deciding whether to merge.
+  REVIEW_FILE=".devbrain/review-latest.md"
+  {
+    printf 'You are an ADVERSARIAL code reviewer. Another session implemented a task on branch %s of project %s.\n' "$BRANCH" "$PROJECT"
+    printf 'Task: "%s"\n\nApproved plan:\n' "$TASK"
+    cat .devbrain/plan-latest.md
+    printf '\n\nDiff against %s (may be truncated if very large):\n\n' "$DEFAULT_BRANCH"
+    git diff "origin/$DEFAULT_BRANCH"..HEAD | head -2500
+    printf '\n\nReview the diff critically and independently. Look for: bugs and regressions, security or secret leaks, changes OUTSIDE the scope of the plan, missing tests, and whether it actually accomplishes the task.\n'
+    printf 'Answer briefly, so a guided beginner can follow it.\n'
+    printf 'The FIRST line must be EXACTLY one of: "VERDICT: APPROVE" | "VERDICT: CONCERNS" | "VERDICT: REJECT".\n'
+    printf 'Then, at most 6 bullet points with concrete findings (file:line where relevant). If it is clean, say so clearly.\n'
+  } | with_timeout 900 claude -p --model opus --permission-mode plan \
+    --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)" \
+    --allowedTools "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(ls:*),Bash(rg:*)" \
+    > "$REVIEW_FILE" 2>/dev/null || true
+  if [ ! -s "$REVIEW_FILE" ]; then
+    printf 'VERDICT: NOT REVIEWED\nThe automatic reviewer failed or timed out; review this PR manually with extra care.\n' > "$REVIEW_FILE"
+  fi
+  VERDICT_LINE="$(head -1 "$REVIEW_FILE")"
+
+  git push -q -u origin "$BRANCH"
+  # --base below takes a branch NAME, not a remote-tracking ref. The guard above and
+  # the reviewer diff DO use origin/ (a stale local base can hide an empty branch),
+  # but prefixing this one would break `gh pr create`. Do not "fix" all three the same way.
+  PR_URL="$(gh pr create --title "devbrain: $TASK" \
+    --body "$(printf '## 🔎 Automatic review (adversarial verifier)\n\n%s\n\n---\n\nRequested via Telegram.\n\n## Approved plan\n\n%s\n\n---\nReview and merge from the GitHub app. Generated by the propose-only loop; the review above is a second agent'"'"'s pass, it does NOT replace your own review.' "$(cat "$REVIEW_FILE")" "$(cat .devbrain/plan-latest.md)")" \
+    --base "$DEFAULT_BRANCH" --head "$BRANCH" 2>&1 | tail -1)"
+  # commit any wiki updates the session left behind (it can't do this itself unattended)
+  if [ -n "$(git -C "$HOME/dev/wiki" status --porcelain 2>/dev/null)" ]; then
+    git -C "$HOME/dev/wiki" add -A
+    git -C "$HOME/dev/wiki" commit -q -m "wiki: ingest devbrain task ($PROJECT)"
+    git -C "$HOME/dev/wiki" push -q 2>/dev/null || true
+  fi
+  echo ""
+  echo "$VERDICT_LINE"
+  echo "PR ready for review: $PR_URL"
+  ;;
+*) usage ;;
+esac

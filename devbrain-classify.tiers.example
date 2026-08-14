@@ -1,0 +1,14 @@
+# Optional tier map read by lib/classify.sh (CLASSIFY_TIERS_FILE).
+# Copy this to devbrain-classify.tiers (same directory) and edit it if you want
+# per-project overrides of the default classification.
+#
+# Format: <absolute-path-prefix>=<tier>
+# Tiers: personal | business-confidential | interno-devbrain | publico
+#
+# Anything not listed here falls through to the fail-closed default in
+# lib/classify.sh (business-confidential) — this file only lets you loosen or
+# tighten specific paths on purpose.
+#
+# Examples (edit or remove):
+# /Users/you/dev/projects/my-open-source-repo=publico
+# /Users/you/dev/projects/my-client-project=business-confidential

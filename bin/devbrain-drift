@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""devbrain-drift — consistency between the system's knowledge stores.
+
+wiki-linkcheck asks "do the links inside this vault resolve?".
+This asks a different question: "do the separate stores still agree?".
+
+It exists because two drifts happened without anything noticing:
+the OpenClaw persona snapshot sat stale for weeks after an edit that only
+touched one of its two copies, and the wiki turned out to hold several pages
+in Claude-memory frontmatter format plus a couple of memory slugs cited as if
+they were wiki pages.
+
+Read-only. Never writes, never touches machine-config, never uses the network.
+Design: docs/superpowers/specs/drift-entre-almacenes-design.md
+
+Usage:
+    devbrain-drift [--quiet]
+
+Exit codes:
+    0  no drift
+    1  drift found (listed on stdout, TAB-separated)
+    2  a configured path does not exist
+"""
+import glob
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+
+HOME = os.path.expanduser("~")
+SNAPSHOT = os.environ.get("DRIFT_SNAPSHOT", f"{HOME}/dev/machine-config/openclaw/workspace")
+LIVE = os.environ.get("DRIFT_LIVE", f"{HOME}/dev/scratch/openclaw-workspace")
+WIKI = os.environ.get("DRIFT_WIKI", f"{HOME}/dev/wiki")
+
+
+def _claude_project_slug(path):
+    """Claude Code's own escaping for ~/.claude/projects/<slug>: every path
+    separator becomes a dash, so /Users/alice becomes -Users-alice. Deriving
+    the default from HOME instead of hardcoding the slug means this still
+    resolves correctly on a different machine, under a different username."""
+    return path.replace("/", "-")
+
+
+MEMORY = os.environ.get(
+    "DRIFT_MEMORY", f"{HOME}/.claude/projects{_claude_project_slug(HOME)}/memory")
+SKILLS = os.environ.get("DRIFT_SKILLS", f"{HOME}/dev/machine-config/claude/skills")
+
+SKIP_DIRS = {".git", ".obsidian", ".trash", "node_modules"}
+# Runtime state, not persona. Comparing these would make the check fail every
+# week, and a gate that always fails stops being a gate.
+RUNTIME_ONLY = {"openclaw-workspace-state.json"}
+
+# --- check_skill_content constants -------------------------------------------
+# Allowlist, not denylist — same principle as devbrain-projects.allow and
+# devbrain-verify.commands ("Hard guardrail: allowlist (not denylist)").
+
+# Same wrapper lib/classify.sh's redact_names() uses, invoked directly here
+# (not through the bash wrapper) because this check needs the redacted text
+# back to diff against the original, not just a pass/fail exit code.
+NOTION_REDACT_BIN = os.environ.get(
+    "NOTION_REDACT_BIN", f"{HOME}/dev/machine-config/bin/notion-redact.py")
+
+SKILL_FRONTMATTER_ALLOWED_KEYS = {"name", "description"}
+
+SECRET_PATTERNS = re.compile(
+    r"sk-[A-Za-z0-9]{10,}"
+    r"|AKIA[0-9A-Z]{16}"
+    r"|-----BEGIN[ A-Z]*PRIVATE KEY-----"
+    r"|://[^/\s:]+:[^/\s@]+@"
+)
+
+# $HOME/... and ~/... both require a trailing slash so this doesn't match an
+# unrelated "~40 files" approximation in prose. /Users/<user>/... requires at
+# least one path segment after the username.
+SKILL_PATH_RE = re.compile(
+    r"\$HOME/[\w.\-/]+|~/[\w.\-/]+|/Users/[\w.\-]+/[\w.\-/]+"
+)
+# Paths under these are explicitly in scope for a skill to cite — e.g. a
+# skill that cites ~/dev/wiki/lessons/<some-lesson>.md as its source of truth.
+# Anything else absolute under home is out of scope.
+SKILL_PATH_ALLOWED_PREFIXES = ("~/dev/wiki", "~/dev/machine-config")
+
+SKILL_URL_RE = re.compile(r"https?://[^\s)>\]\"'`]+")
+# Open design decision, easy to extend: start with GitHub (where the repos
+# live) and Anthropic's own docs/marketing domains.
+SKILL_URL_ALLOWED_DOMAINS = ("github.com", "docs.anthropic.com",
+                             "docs.claude.com", "anthropic.com")
+
+
+def top_level_md(d):
+    return {f for f in os.listdir(d)
+            if f.endswith(".md") and os.path.isfile(os.path.join(d, f))}
+
+
+def read(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def check_openclaw_snapshot():
+    """The versioned persona snapshot must mirror the live workspace."""
+    out = []
+    repo, live = top_level_md(SNAPSHOT), top_level_md(LIVE)
+    for name in sorted(live - repo):
+        out.append(("openclaw-snapshot", f"falta-en-repo\t{name}"))
+    for name in sorted(repo - live):
+        out.append(("openclaw-snapshot", f"falta-en-vivo\t{name}"))
+    for name in sorted(repo & live):
+        if read(os.path.join(SNAPSHOT, name)) != read(os.path.join(LIVE, name)):
+            out.append(("openclaw-snapshot", f"contenido-distinto\t{name}"))
+    return out
+
+
+def check_wiki_format():
+    """Guards the house decision: H1 titles, never YAML frontmatter."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(WIKI):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fn in sorted(filenames):
+            if not fn.endswith(".md"):
+                continue
+            path = os.path.join(dirpath, fn)
+            rel = os.path.relpath(path, WIKI)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    first = fh.readline().rstrip("\n")
+            except OSError:
+                continue
+            if first.strip() == "---":
+                out.append(("wiki-format", f"frontmatter-yaml\t{rel}"))
+            elif not first.startswith("# "):
+                out.append(("wiki-format", f"sin-titulo-h1\t{rel}"))
+    return out
+
+
+def check_memory_index():
+    """Internal consistency of the Claude memory store.
+
+    Prints file names and slugs only — never a line of file content. These
+    files may hold personal material.
+    """
+    out = []
+    index_path = os.path.join(MEMORY, "MEMORY.md")
+    if not os.path.isfile(index_path):
+        return [("memory-index", "falta-indice\tMEMORY.md")]
+    index = read(index_path)
+
+    files = {f for f in os.listdir(MEMORY)
+             if f.endswith(".md") and f != "MEMORY.md"
+             and os.path.isfile(os.path.join(MEMORY, f))}
+
+    for name in sorted(files):
+        if f"({name})" not in index:
+            out.append(("memory-index", f"huerfano-sin-indice\t{name}"))
+
+    for target in sorted(set(re.findall(r'\]\(([a-z0-9][a-z0-9._-]*\.md)\)', index))):
+        if not os.path.isfile(os.path.join(MEMORY, target)):
+            out.append(("memory-index", f"indice-apunta-a-inexistente\t{target}"))
+
+    slugs = set()
+    for name in sorted(files | {"MEMORY.md"}):
+        slugs |= set(re.findall(r'\[\[([a-z0-9][a-z0-9._-]*)\]\]',
+                                read(os.path.join(MEMORY, name))))
+    for slug in sorted(slugs):
+        if not os.path.isfile(os.path.join(MEMORY, f"{slug}.md")):
+            out.append(("memory-index", f"wikilink-no-resuelve\t[[{slug}]]"))
+    return out
+
+
+def split_skill_frontmatter(text):
+    """Split a SKILL.md into (frontmatter_lines, body).
+
+    Returns (None, text) if the file does not open with a closing '---' pair
+    — the frontmatter key check is then simply skipped for that file, no crash.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None, text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return lines[1:i], "\n".join(lines[i + 1:])
+    return None, text
+
+
+def normalize_skill_path(raw):
+    """Fold $HOME/... and /Users/<user>/... to the same ~/... form so the
+    allowlist only has to be spelled out once."""
+    if raw.startswith("$HOME/"):
+        return "~/" + raw[len("$HOME/"):]
+    if raw.startswith("~/"):
+        return raw
+    m = re.match(r"^/Users/[\w.\-]+/(.*)$", raw)
+    if m:
+        return "~/" + m.group(1)
+    return raw
+
+
+def skill_path_allowed(norm):
+    return any(norm == p or norm.startswith(p + "/")
+               for p in SKILL_PATH_ALLOWED_PREFIXES)
+
+
+def skill_url_domain_allowed(domain):
+    domain = domain.lower()
+    return any(domain == d or domain.endswith("." + d)
+               for d in SKILL_URL_ALLOWED_DOMAINS)
+
+
+def redact_skill_body(body):
+    """Runs bin/notion-redact.py over `body` and reports whether it redacted
+    anything. Returns None (not True/False) when the redaction subsystem
+    itself is unavailable — missing redactor, missing/empty names file — so
+    the caller can skip the sub-check instead of treating infrastructure
+    absence as either a finding or a crash. Mirrors the exit-code contract
+    lib/classify.sh's redact_names() documents (2 = missing/empty names
+    file, 3 = missing redactor) but does not fail devbrain-drift on either.
+    """
+    if not os.path.isfile(NOTION_REDACT_BIN):
+        print(f"devbrain-drift: skill name check skipped, redactor not found "
+              f"at {NOTION_REDACT_BIN}", file=sys.stderr)
+        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, NOTION_REDACT_BIN, "--text"],
+            input=body, capture_output=True, text=True, timeout=10,
+        )
+    except OSError as exc:
+        print(f"devbrain-drift: skill name check skipped, could not run "
+              f"redactor: {exc}", file=sys.stderr)
+        return None
+    if proc.returncode != 0:
+        print(f"devbrain-drift: skill name check skipped, redactor exited "
+              f"{proc.returncode}: {proc.stderr.strip()}", file=sys.stderr)
+        return None
+    return proc.stdout != body
+
+
+def check_skill_content():
+    """Allowlist checks over every claude/skills/*/SKILL.md.
+
+    Same principle the system already applies in devbrain-projects.allow and
+    devbrain-verify.commands: allowlist, not denylist. Frontmatter keys,
+    secret-shaped strings, redacted person names, out-of-scope absolute
+    paths, and URL domains are each checked against an explicit allowlist;
+    anything not on it is a finding.
+
+    Deliberately does NOT try to detect prose instructions like "run X
+    without confirming" — that is semantic, not syntactic, and a regex
+    cannot tell a real instruction from an illustrative counter-example
+    without trading false positives for false negatives.
+    """
+    out = []
+    for path in sorted(glob.glob(os.path.join(SKILLS, "*", "SKILL.md"))):
+        rel = os.path.relpath(path, SKILLS)
+        text = read(path)
+        fm_lines, body = split_skill_frontmatter(text)
+
+        if fm_lines is not None:
+            keys = set()
+            for line in fm_lines:
+                if not line or line[0] in (" ", "\t"):
+                    continue  # indented continuation of a folded value
+                m = re.match(r"^([A-Za-z_][\w-]*):", line)
+                if m:
+                    keys.add(m.group(1))
+            for key in sorted(keys - SKILL_FRONTMATTER_ALLOWED_KEYS):
+                out.append(("skill-content", f"frontmatter-clave-extra\t{rel}\t{key}"))
+
+        if SECRET_PATTERNS.search(body):
+            out.append(("skill-content", f"secreto-posible\t{rel}"))
+
+        redacted = redact_skill_body(body)
+        if redacted:
+            out.append(("skill-content", f"nombre-posible\t{rel}"))
+
+        for m in SKILL_PATH_RE.finditer(body):
+            raw = m.group(0).rstrip(".,;:)]}'\"`")
+            if not skill_path_allowed(normalize_skill_path(raw)):
+                out.append(("skill-content", f"ruta-fuera-de-alcance\t{rel}\t{raw}"))
+
+        for m in SKILL_URL_RE.finditer(body):
+            url = m.group(0).rstrip(".,;:)]}'\"`")
+            domain = urllib.parse.urlparse(url).netloc.split("@")[-1].split(":")[0]
+            if not skill_url_domain_allowed(domain):
+                out.append(("skill-content", f"url-fuera-de-allowlist\t{rel}\t{domain}"))
+    return out
+
+
+def main(argv):
+    quiet = "--quiet" in argv[1:]
+    for label, path in (("DRIFT_SNAPSHOT", SNAPSHOT), ("DRIFT_LIVE", LIVE),
+                        ("DRIFT_WIKI", WIKI), ("DRIFT_MEMORY", MEMORY),
+                        ("DRIFT_SKILLS", SKILLS)):
+        if not os.path.isdir(path):
+            print(f"devbrain-drift: {label} no existe: {path}", file=sys.stderr)
+            return 2
+
+    findings = (check_openclaw_snapshot()
+                + check_wiki_format()
+                + check_memory_index()
+                + check_skill_content())
+
+    if not quiet:
+        for check, detail in findings:
+            print(f"{check}\t{detail}")
+        print(f"drift: {len(findings)}")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""devbrain-stacked-pr-check — merged PRs that never actually reached the base branch.
+
+devbrain-drift compares knowledge stores (wiki, memory, OpenClaw snapshot). This
+checks a different category entirely: the state of git remotes. GitHub can report
+`state: MERGED` for a PR whose head branch was merged into its *own base branch*
+(a stacked PR, opened against another unmerged PR's branch instead of main) —
+and if that base branch stopped being an ancestor of main before this merge
+happened, the commits never reach main at all, even though the PR page says
+MERGED. A stacked PR whose base branch gets merged (or closed) out from under
+it can silently vanish from view this way — reported MERGED, but its commits
+never landed on main — and that costs a review cycle to notice by hand. See
+wiki/lessons/pr-apilado-mergeado-nunca-llega-a-main.md for the full incident
+this exists to catch.
+
+Read-only against GitHub: only `gh pr list` (a search) and local `git fetch` /
+`git merge-base --is-ancestor` against the *manual verification command* already
+established in that lesson. Never writes, comments, or closes anything.
+
+Scope: only branches matching STACKED_PR_BRANCH_PREFIX (default "devbrain/") —
+devbrain is the only thing that stacks PRs this way — and only PRs merged within
+the last STACKED_PR_WINDOW_DAYS days (default 30). The window exists because
+scanning full repo history would be slow and noisy with long-cleaned-up branches;
+30 days comfortably covers devbrain's own turnaround (plan -> execute -> PR
+happens same-day to same-week) plus a buffer for a straggler review, without
+re-litigating branches from months ago that are almost certainly already resolved
+one way or another.
+
+Cost: at most 1 `gh pr list` call per repo (never per-branch — that is what
+would risk rate limits with several repos x several branches), plus a bounded
+number of local `git fetch` calls per repo (one per recently-merged devbrain/*
+PR found, typically 0-3, never one per devbrain branch that ever existed).
+
+Usage:
+    devbrain-stacked-pr-check [--quiet]
+
+Exit codes:
+    0  no orphaned merges found
+    1  orphaned merges found (listed on stdout, TAB-separated)
+    2  a configured path does not exist (PROJECTS_DIR or ALLOWFILE)
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+
+HOME = os.path.expanduser("~")
+PROJECTS_DIR = os.environ.get("STACKED_PR_PROJECTS_DIR", f"{HOME}/dev/projects")
+ALLOWFILE = os.environ.get("STACKED_PR_ALLOWFILE",
+                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+BASE_OVERRIDE_FILE = os.environ.get("STACKED_PR_BASE_OVERRIDE",
+                                     f"{HOME}/dev/machine-config/devbrain-base-branch.override")
+WINDOW_DAYS = int(os.environ.get("STACKED_PR_WINDOW_DAYS", "30"))
+BRANCH_PREFIX = os.environ.get("STACKED_PR_BRANCH_PREFIX", "devbrain/")
+GH_BIN = os.environ.get("STACKED_PR_GH", "gh")
+GIT_BIN = os.environ.get("STACKED_PR_GIT", "git")
+
+FINDING = "pr-apilado-huerfano"
+
+OWNER_REPO_RE = re.compile(r'github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$')
+
+
+def warn(msg):
+    print(f"devbrain-stacked-pr-check: {msg}", file=sys.stderr)
+
+
+def read_lines(path):
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            yield line
+
+
+def read_allowlist(path):
+    return list(read_lines(path))
+
+
+def read_base_overrides(path):
+    overrides = {}
+    if not os.path.isfile(path):
+        return overrides
+    for line in read_lines(path):
+        if "=" not in line:
+            continue
+        project, branch = line.split("=", 1)
+        overrides[project.strip()] = branch.strip()
+    return overrides
+
+
+def run(cmd, cwd=None):
+    """Run a subprocess, never raising. Returns (ok, stdout)."""
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=60)
+        return proc.returncode == 0, proc.stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
+def get_origin_owner_repo(project_dir):
+    # `git remote get-url` expands `url.<x>.insteadOf` rewrites; we want the
+    # identity of the remote (owner/repo), not its resolved transport, so read
+    # the raw configured value instead.
+    ok, out = run([GIT_BIN, "-C", project_dir, "config", "--get", "remote.origin.url"])
+    if not ok:
+        return None
+    m = OWNER_REPO_RE.search(out.strip())
+    return (m.group(1), m.group(2)) if m else None
+
+
+def get_default_branch(project_dir):
+    """Ask the remote directly (one call) instead of `remote show origin`
+    (heavier: fetches ref lists) — we only need the symbolic HEAD target."""
+    ok, out = run([GIT_BIN, "-C", project_dir, "ls-remote", "--symref", "origin", "HEAD"])
+    if not ok:
+        return None
+    m = re.search(r'^ref:\s+refs/heads/(\S+)\s+HEAD', out, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def get_recent_merged_prs(owner, repo, cutoff_date):
+    """One gh call per repo, bounded by the time window, never per-branch."""
+    search = f"is:pr is:merged merged:>={cutoff_date.strftime('%Y-%m-%d')}"
+    ok, out = run([GH_BIN, "pr", "list", "-R", f"{owner}/{repo}",
+                   "--search", search,
+                   "--json", "number,headRefName,mergedAt",
+                   "--limit", "100"])
+    if not ok:
+        warn(f"gh pr list failed for {owner}/{repo}: {out.strip()[:200]}")
+        return []
+    try:
+        prs = json.loads(out)
+    except json.JSONDecodeError:
+        warn(f"gh pr list returned non-JSON for {owner}/{repo}")
+        return []
+    return prs
+
+
+def parse_merged_at(value):
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def check_project(project, base_overrides, cutoff_date):
+    findings = []
+    project_dir = os.path.join(PROJECTS_DIR, project)
+    if not os.path.isdir(project_dir):
+        warn(f"{project}: no local checkout at {project_dir}, skipping")
+        return findings
+    ok, _ = run([GIT_BIN, "-C", project_dir, "rev-parse", "--git-dir"])
+    if not ok:
+        warn(f"{project}: {project_dir} is not a git repository, skipping")
+        return findings
+
+    owner_repo = get_origin_owner_repo(project_dir)
+    if not owner_repo:
+        warn(f"{project}: could not resolve a github.com owner/repo from origin, skipping")
+        return findings
+    owner, repo = owner_repo
+
+    base_branch = base_overrides.get(project) or get_default_branch(project_dir)
+    if not base_branch:
+        warn(f"{project}: could not determine base branch, skipping")
+        return findings
+
+    ok, _ = run([GIT_BIN, "-C", project_dir, "fetch", "-q", "origin",
+                 f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}"])
+    if not ok:
+        warn(f"{project}: could not fetch base branch '{base_branch}', skipping")
+        return findings
+
+    prs = get_recent_merged_prs(owner, repo, cutoff_date)
+    for pr in prs:
+        branch = pr.get("headRefName", "")
+        if not branch.startswith(BRANCH_PREFIX):
+            continue
+        merged_at = parse_merged_at(pr.get("mergedAt", ""))
+        if merged_at is None or merged_at < cutoff_date:
+            continue  # defensive: trust our own filter, not just the search string
+        number = pr.get("number")
+
+        # Fetch this specific branch tip. If it fails, the branch was deleted on
+        # the remote (e.g. auto-delete-on-merge) -- unverifiable by this cheap
+        # method, not an error, and out of scope (the lesson's own wording is
+        # framed around "la punta de la rama", which requires the ref to exist).
+        ok, _ = run([GIT_BIN, "-C", project_dir, "fetch", "-q", "origin",
+                     f"+refs/heads/{branch}:refs/remotes/origin/{branch}"])
+        if not ok:
+            continue
+
+        # The exact verification command from the lesson: is the branch tip an
+        # ancestor of the base? Exit 0 = yes (fine). Exit 1 = no (orphan).
+        proc = subprocess.run(
+            [GIT_BIN, "-C", project_dir, "merge-base", "--is-ancestor",
+             f"origin/{branch}", f"origin/{base_branch}"],
+            capture_output=True, text=True, timeout=60)
+        if proc.returncode == 1:
+            findings.append((project, branch, number))
+        elif proc.returncode not in (0, 1):
+            warn(f"{project}: merge-base --is-ancestor errored for {branch}: "
+                 f"{proc.stderr.strip()[:200]}")
+    return findings
+
+
+def main(argv):
+    quiet = "--quiet" in argv[1:]
+
+    if not os.path.isdir(PROJECTS_DIR):
+        print(f"devbrain-stacked-pr-check: STACKED_PR_PROJECTS_DIR no existe: {PROJECTS_DIR}",
+              file=sys.stderr)
+        return 2
+    if not os.path.isfile(ALLOWFILE):
+        print(f"devbrain-stacked-pr-check: STACKED_PR_ALLOWFILE no existe: {ALLOWFILE}",
+              file=sys.stderr)
+        return 2
+
+    projects = read_allowlist(ALLOWFILE)
+    base_overrides = read_base_overrides(BASE_OVERRIDE_FILE)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
+
+    findings = []
+    for project in projects:
+        findings.extend(check_project(project, base_overrides, cutoff_date))
+
+    if not quiet:
+        for project, branch, number in findings:
+            print(f"{FINDING}\t{project}\t{branch}\t{number}")
+        print(f"stacked-pr: {len(findings)}")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

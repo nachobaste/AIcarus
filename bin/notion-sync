@@ -1,0 +1,496 @@
+#!/bin/bash
+# bin/notion-sync — orchestrator: projects the wiki/queue/process-area docs
+# into the operator's private Notion dashboard. Bash owns flags, secrets and
+# exit codes; the actual HTTP/JSON work is bin/notion-sync-upsert.py.
+# Spec: docs/superpowers/specs/2026-08-06-notion-visibilidad-design.md
+#
+# Usage: notion-sync [--dry-run] [--base NAME] [--bootstrap-schema] [--check]
+#
+#   (no flags)          Full sync: create/update every row, archive rows
+#                        absent from source, write the run marker on success.
+#   --dry-run           Compute and report everything -- this still QUERIES
+#                        the real workspace, because reporting create-vs-
+#                        update accurately requires knowing what already
+#                        exists there -- but issues zero POST/PATCH and never
+#                        touches the run marker. Reading is not writing.
+#   --base NAME         Restrict to one base: Areas | Projects | Goals |
+#                        Tasks | Events | Resources | Meetings.
+#   --bootstrap-schema   Add the four control properties (Sync Key, Fuente,
+#                        Última sincronización, Archive) PLUS every content
+#                        property the gathered rows carry for the target
+#                        database(s) -- derived from the rows, never a
+#                        hardcoded table, so a field a later task adds is
+#                        automatically included. `Name` is never (re)created:
+#                        it already exists as each base's title property.
+#                        Exits after. Safe to re-run. Touches no row, no
+#                        marker, and does not classify/redact -- only static
+#                        property names and types are sent, never a row's
+#                        values.
+#   --check              Report whether the last successful sync is recent
+#                        enough. Needs no Notion credentials at all -- it
+#                        only reads a local marker file. Alerts over
+#                        Telegram and fails when the marker is stale,
+#                        missing, or unreadable.
+#
+# Order of operations -- and nothing may reach the network before the gate
+# has passed:
+#   load secret -> resolve database ids -> gather rows -> [--bootstrap-schema
+#   branches here: derive + PATCH schema, exit] -> classify + redact ->
+#   upsert -> write the run marker (real syncs only, only on success).
+#
+# Exit codes. Chosen for THIS script; bin/notion-api and bin/notion-ids.py
+# use a different numbering for their own smaller set of failure modes, and
+# bin/notion-sync-upsert.py's exit codes (documented in its own header) are
+# translated into this table by map_worker_rc(), not reused directly.
+#   0  success.
+#   1  Notion API error -- a persistent non-2xx response, the workspace's
+#      own data is in a state this script cannot reconcile (e.g. two Notion
+#      pages already share a Sync Key), or a row violates the parser's
+#      contract (no Name -- never fabricated from sync_key; see
+#      bin/notion-sync-upsert.py). This last case issues zero requests: every
+#      row is validated before any base is touched.
+#   2  egress or redaction refusal. A source's classification tier may not
+#      reach Notion (lib/classify.sh's assert_egress_ok), or the redactor
+#      refused to run (missing name list or missing redactor binary -- both
+#      collapse to this one code; the underlying tool's own stderr message
+#      keeps the two distinguishable for a human). The whole run aborts
+#      before any write, always.
+#   3  configuration error -- the secrets file or NOTION_TOKEN is missing,
+#      the id cache is missing an entry for a base this run needs, gathering
+#      rows failed (a malformed source file, or an internal usage mistake
+#      talking to bin/notion-sync-sources.py), or (--check only) the run
+#      marker is stale, missing, or unreadable.
+#   4  transport failure -- a request never reached an HTTP status.
+#   5  usage error -- bad flags, or an unrecognised --base value.
+#   6  deadline exceeded -- some external process this script forked (any
+#      mode except --check: bin/notion-ids.py, bin/notion-sync-sources.py,
+#      the redactor, or bin/notion-sync-upsert.py) did not finish within
+#      NOTION_SYNC_DEADLINE_SECONDS. It is terminated, the run marker is
+#      left untouched (see invariant below), and the log names what timed
+#      out and after how long. This exists because a hang is this system's
+#      worst failure mode: the dashboard freezes while reading as current
+#      truth and nothing alerts, because nothing failed. See lib/queue.sh's
+#      with_timeout and wiki/lessons/bash-watchdog-orfano.md, and the
+#      deadline section further down for why this wraps each external
+#      process individually rather than the script as a whole.
+#
+# Test seams (never set outside tests):
+#   NOTION_SYNC_ROWS_FILE   read gathered rows from this file instead of
+#                           invoking bin/notion-sync-sources.py. Lets tests
+#                           control the exact row set (including planting a
+#                           row whose source must be refused by the gate)
+#                           without touching the real wiki.
+#   NOTION_SECRETS_FILE, NOTION_MARKER, NOTION_STALE_DAYS, NOTION_IDS_FILE,
+#   NOTION_REDACT_BIN, CLASSIFY_NAMES_FILE, NOTION_BASE, NOTION_TOKEN
+#                           all overridable, same convention as the scripts
+#                           that already define them.
+#   NOTION_SYNC_DEADLINE_SECONDS
+#                           override the per-external-process deadline
+#                           (default 900 = 15 minutes; see the deadline
+#                           section below for how that number was picked
+#                           and why it is per-call, not whole-script). A
+#                           test wants this small.
+#
+# tg_send is sourced from lib/telegram.sh ONLY if not already defined, so a
+# test can `export -f tg_send` a logging stub before invoking this script and
+# observe that the alert path actually fires -- without lib/telegram.sh (a
+# shared file used well beyond this task) needing any change at all.
+
+set -uo pipefail
+
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LIB_DIR="$DIR/lib"
+BIN_DIR="$DIR/bin"
+
+# shellcheck source=../lib/classify.sh
+source "$LIB_DIR/classify.sh"
+# shellcheck source=../lib/queue.sh
+source "$LIB_DIR/queue.sh"      # with_timeout -- see the deadline section below
+
+if ! type tg_send >/dev/null 2>&1; then
+  # shellcheck source=../lib/telegram.sh
+  source "$LIB_DIR/telegram.sh"
+fi
+
+NOTION_SECRETS_FILE="${NOTION_SECRETS_FILE:-$HOME/.config/devbrain/secrets/notion.env}"
+NOTION_MARKER="${NOTION_MARKER:-$HOME/.openclaw/notion-sync-last}"
+NOTION_STALE_DAYS="${NOTION_STALE_DAYS:-8}"
+
+KNOWN_BASES="Areas Projects Goals Tasks Events Resources Meetings"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+usage() {
+  cat >&2 <<EOF
+usage: notion-sync [--dry-run] [--base NAME] [--bootstrap-schema] [--check]
+  NAME is one of: $KNOWN_BASES
+EOF
+}
+
+# redact_rows_json -- stdin: a JSON array of rows -> stdout: the same array
+# with every string VALUE (never a key) redacted.
+#
+# lib/classify.sh's own redact_names always calls the redactor with --text,
+# which has no notion of JSON structure -- run on this payload it would also
+# rewrite KEYS, which is exactly the corruption Task 1 found and fixed for
+# the --text path only ("Sync" in the names list turned "Sync Key" itself
+# into "[puesto] Key"). This mirrors redact_names' own distinct exit codes
+# (3 = redactor binary missing, 2 = name list missing/empty, from
+# notion-redact.py itself) but calls the redactor WITHOUT --text, i.e. its
+# default JSON mode, which walks string values only.
+redact_rows_json() {
+  if [ ! -f "$NOTION_REDACT_BIN" ]; then
+    printf 'notion-sync: redactor not found at %s (this is NOT the missing-names-list case)\n' \
+      "$NOTION_REDACT_BIN" >&2
+    return 3
+  fi
+  run_with_deadline "the redactor (bin/notion-redact.py)" python3 "$NOTION_REDACT_BIN"
+}
+
+map_worker_rc() {  # $1 = bin/notion-sync-upsert.py's exit code -> ours
+  case "$1" in
+    0) echo 0 ;;
+    1) echo 1 ;;
+    2) echo 4 ;;
+    3) echo 3 ;;
+    4) echo 5 ;;
+    *) echo 1 ;;
+  esac
+}
+
+DRY_RUN=0
+BASE_FILTER=""
+BOOTSTRAP=0
+DO_CHECK=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --base)
+      shift
+      if [ $# -eq 0 ]; then
+        echo "notion-sync: --base needs a value" >&2
+        usage
+        exit 5
+      fi
+      BASE_FILTER="$1"
+      ;;
+    --bootstrap-schema) BOOTSTRAP=1 ;;
+    --check) DO_CHECK=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "notion-sync: unrecognised argument: $1" >&2
+      usage
+      exit 5
+      ;;
+  esac
+  shift
+done
+
+if [ -n "$BASE_FILTER" ]; then
+  case " $KNOWN_BASES " in
+    *" $BASE_FILTER "*) ;;
+    *)
+      echo "notion-sync: unknown base '$BASE_FILTER' (known: $KNOWN_BASES)" >&2
+      exit 5
+      ;;
+  esac
+fi
+
+DRY_FLAG=""
+[ "$DRY_RUN" = "1" ] && DRY_FLAG="--dry-run"
+
+# ---- --check: standalone, needs no Notion credentials at all --------------
+if [ "$DO_CHECK" = "1" ]; then
+  if [ ! -f "$NOTION_MARKER" ]; then
+    msg="notion-sync nunca ha corrido con éxito -- el tablero de Notion está vacío."
+    echo "notion-sync: $msg" >&2
+    tg_send "🟠 notion-sync — $msg"
+    exit 3
+  fi
+  # Bound the input before it ever reaches arithmetic: a garbage or huge
+  # marker must be rejected here, not fed to `$(( ))`. (The clamp that
+  # taught this lesson elsewhere in this plan compared an unbounded value
+  # directly and the check silently no-opped; validate-then-compute avoids
+  # that class entirely.)
+  raw="$(head -c 64 "$NOTION_MARKER" 2>/dev/null | tr -d '[:space:]')"
+  last_epoch="$(date -j -f '%Y-%m-%d' "$raw" +%s 2>/dev/null)"
+  if [ -z "$last_epoch" ]; then
+    last_epoch="$(date -d "$raw" +%s 2>/dev/null)"
+  fi
+  case "$last_epoch" in
+    ''|*[!0-9]*)
+      msg="el marcador $NOTION_MARKER es ilegible ('$raw'); no se puede confirmar la última sincronización."
+      echo "notion-sync: $msg" >&2
+      tg_send "🟠 notion-sync — $msg"
+      exit 3
+      ;;
+  esac
+  now_epoch="$(date -u +%s)"
+  age=$(( (now_epoch - last_epoch) / 86400 ))
+  if [ "$age" -gt "$NOTION_STALE_DAYS" ]; then
+    msg="notion-sync no corre desde hace $age días (última: $raw). El tablero está congelado."
+    echo "notion-sync: $msg" >&2
+    tg_send "🟠 notion-sync — $msg"
+    exit 3
+  fi
+  echo "notion-sync: last successful run $raw ($age days ago)"
+  exit 0
+fi
+
+# ---- the deadline: this is why this task exists ---------------------------
+# A hang is this system's worst failure mode: the dashboard freezes while
+# reading as current truth, and nothing alerts because nothing failed. This
+# covers every remaining mode (--dry-run, --bootstrap-schema, a full sync),
+# not just the full sync, because the parked Task 3 finding (a FIFO at the
+# id-cache path makes bin/notion-ids.py --get block forever, no crash, no
+# error) sits in a helper every one of those modes calls before doing
+# anything else.
+#
+# This uses with_timeout (lib/queue.sh) -- same as devbrain-scrapers and
+# bin/devbrain: with_timeout SECONDS command... -- and does NOT background a
+# sleep watchdog; read the comment on with_timeout itself and
+# wiki/lessons/bash-watchdog-orfano.md for why an earlier version of that
+# idea killed two unrelated sessions with a stale SIGTERM.
+#
+# It wraps each external process THIS script forks directly (below:
+# bin/notion-ids.py per base, bin/notion-sync-sources.py, the redactor, and
+# bin/notion-sync-upsert.py) rather than wrapping this whole script once.
+# That is not the whack-a-mole the brief warns against -- it is the SAME
+# fix applied uniformly to every place this script hands control to a
+# process that reads a file or a socket, which is the complete set of
+# blocking risks; nothing else in this script does I/O that can stall.
+#
+# It is NOT one wrap around the whole script (e.g. re-invoking this file
+# under with_timeout) because that was tried first and reproducibly failed
+# to bound anything: this script sets `trap ... EXIT` at the top (for the
+# $TMP cleanup a few lines up), and bash defers acting on an unhandled
+# fatal signal until the CURRENT foreground command finishes whenever any
+# trap -- even just on EXIT -- is set. Confirmed directly: with a 3s
+# deadline wrapped around a re-exec of this whole script, a slow (not even
+# hung) mock response still ran for its full ~20s before the wrapper
+# noticed anything, and for a TRUE hang (the FIFO case) the deferred signal
+# would never be delivered at all, since "the foreground command finishes"
+# never happens -- silently defeating the entire point of this task. A bare
+# external process (python3, with no trap of its own) has no such
+# deferral: SIGTERM reaches it immediately, including while it is blocked
+# inside a syscall like a FIFO's open(). That is why the wrapping happens
+# at each external-process call site instead.
+#
+# Marker safety falls out of ordering, not extra code: the marker is only
+# ever written at the very end, after upsert succeeds (see near EOF). A
+# timeout at any earlier call site -- which is where a hang would be --
+# exits before that line is ever reached, so "failed or timed-out run
+# never updates the marker" (invariant 1) holds without a special case.
+SYNC_DEADLINE_SECONDS="${NOTION_SYNC_DEADLINE_SECONDS:-900}"
+
+# run_with_deadline <label> <cmd...> -- runs cmd under with_timeout. On a
+# timeout, logs what timed out and after how long (stderr, so it lands in
+# the launchd log same as every other diagnostic here) and returns 124
+# unchanged, so callers can tell it apart from cmd's own exit codes and
+# react the same way every time: exit 6, marker untouched. On any other
+# exit code, passes it straight through -- this function changes nothing
+# about a normal success or a normal failure.
+run_with_deadline() {
+  local label="$1"; shift
+  local start elapsed rc
+  start="$(date -u +%s)"
+  with_timeout "$SYNC_DEADLINE_SECONDS" "$@"
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    elapsed=$(( $(date -u +%s) - start ))
+    echo "notion-sync: TIMEOUT after ${elapsed}s (deadline ${SYNC_DEADLINE_SECONDS}s) -- $label did not finish; the run marker was NOT touched" >&2
+  fi
+  return "$rc"
+}
+
+# ---- load the secret. Every remaining mode needs this -- even --dry-run
+# and --bootstrap-schema -- so a missing token is caught in exactly one
+# place, before a single row is gathered. ------------------------------------
+if [ ! -f "$NOTION_SECRETS_FILE" ]; then
+  echo "notion-sync: secrets file not found at $NOTION_SECRETS_FILE" >&2
+  exit 3
+fi
+set -a
+# shellcheck disable=SC1090
+source "$NOTION_SECRETS_FILE"
+set +a
+if [ -z "${NOTION_TOKEN:-}" ]; then
+  echo "notion-sync: NOTION_TOKEN is not set in $NOTION_SECRETS_FILE" >&2
+  exit 3
+fi
+
+if [ -n "$BASE_FILTER" ]; then
+  BASES="$BASE_FILTER"
+else
+  BASES="$KNOWN_BASES"
+fi
+
+# ---- resolve every id this run needs, BEFORE any network write. One
+# missing id must abort before anything else -- "no partial sync". ----------
+# Resources' Area field is a relation into Areas (plan 300), so a run scoped
+# to `--base Resources` still needs the Areas database id resolved -- even
+# though this run's ROWS_JSON filter (below) never includes an Areas ROW and
+# never writes to it. ID_BASES is deliberately separate from BASES: BASES
+# keeps deciding which rows get synced, ID_BASES only widens which ids get
+# looked up. Without this split, `--base Resources` alone can never resolve
+# an Area name -- it fails with "does not exist", which reads exactly like a
+# real missing Area even when the Area is real; the actual cause is that
+# Areas' id was never even requested.
+ID_BASES="$BASES"
+case " $BASES " in
+  *" Resources "*)
+    case " $BASES " in
+      *" Areas "*) ;;
+      *) ID_BASES="$BASES Areas" ;;
+    esac
+    ;;
+esac
+IDS_ARGS=()
+for base in $ID_BASES; do
+  id_val="$(run_with_deadline "resolving the database id for base '$base' (bin/notion-ids.py --get)" \
+              "$BIN_DIR/notion-ids.py" --get "$base" 2>"$TMP/ids.err")"
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    # run_with_deadline's own TIMEOUT line went to fd 2 as redirected above
+    # (into ids.err, alongside bin/notion-ids.py's own stderr) -- surface it
+    # for real, same as every other failure path here does with its .err
+    # capture, or the log this exists to inform would say nothing at all.
+    cat "$TMP/ids.err" >&2
+    exit 6
+  elif [ $rc -ne 0 ]; then
+    echo "notion-sync: cannot resolve the database id for base '$base':" >&2
+    cat "$TMP/ids.err" >&2
+    exit 3
+  fi
+  IDS_ARGS+=(--arg "$base" "$id_val")
+done
+IDS_JSON="$(jq -n '$ARGS.named' "${IDS_ARGS[@]}")"
+# Deliberately the ORIGINAL $BASES, not $ID_BASES: Areas' id is available for
+# relation lookups above, but a `--base Resources` run must still never
+# treat Areas as "requested" -- that would archive every existing Areas page
+# (nothing in this run's rows would count as "seen"). Caught in a --dry-run
+# before anything real happened (2026-08-09), which is exactly why --dry-run
+# is mandatory before a real run of this change.
+SYNC_BASES_JSON="$(jq -n --arg s "$BASES" '$s | split(" ")')"
+
+# ---- gather rows. --bootstrap-schema needs these too now: the property set
+# it creates is DERIVED from what the rows actually carry, not a hardcoded
+# table (the first real sync died on row one with "Código is not a property
+# that exists" -- a missing content property, because an earlier version of
+# this brief said the bootstrap need only create the four control ones). ----
+if [ -n "${NOTION_SYNC_ROWS_FILE:-}" ] && [ -f "$NOTION_SYNC_ROWS_FILE" ]; then
+  ALL_ROWS_JSON="$(cat "$NOTION_SYNC_ROWS_FILE")"
+else
+  ALL_ROWS_JSON="$(run_with_deadline "gathering sources (bin/notion-sync-sources.py)" \
+                     "$BIN_DIR/notion-sync-sources.py" all 2>"$TMP/sources.err")"
+  grc=$?
+  if [ "$grc" -eq 124 ]; then
+    cat "$TMP/sources.err" >&2
+    exit 6
+  elif [ $grc -ne 0 ]; then
+    echo "notion-sync: gathering sources failed:" >&2
+    cat "$TMP/sources.err" >&2
+    exit 3
+  fi
+fi
+
+BASES_JSON="$(jq -n --arg s "$BASES" '$s | split(" ")')"
+ROWS_JSON="$(printf '%s' "$ALL_ROWS_JSON" \
+             | jq -c --argjson bases "$BASES_JSON" \
+                 '[.[] | select(.base as $b | $bases | index($b) != null)]')"
+
+# ---- --bootstrap-schema: touches no row, no marker, and does not classify/
+# redact -- only property NAMES and TYPES are sent (e.g. "Código": rich_text),
+# never a row's VALUES, and redaction only ever touches JSON string values,
+# never a dict's keys, so the gate cannot change what gets derived here. ----
+if [ "$BOOTSTRAP" = "1" ]; then
+  WORKER_OUT="$(printf '%s' "$ROWS_JSON" \
+                | run_with_deadline "the bootstrap-schema worker (bin/notion-sync-upsert.py)" \
+                    python3 "$BIN_DIR/notion-sync-upsert.py" bootstrap --ids "$IDS_JSON" $DRY_FLAG \
+                  2>"$TMP/worker.err")"
+  worker_rc=$?
+  if [ "$worker_rc" -eq 124 ]; then
+    cat "$TMP/worker.err" >&2
+    exit 6
+  fi
+  sync_rc="$(map_worker_rc "$worker_rc")"
+  if [ "$sync_rc" != "0" ]; then
+    echo "notion-sync: bootstrap-schema failed:" >&2
+    cat "$TMP/worker.err" >&2
+    exit "$sync_rc"
+  fi
+  echo "notion-sync: bootstrap-schema applied to:"
+  printf '%s\n' "$WORKER_OUT" | jq -r '"  " + .base + ": " + (.properties | join(", "))'
+  exit 0
+fi
+
+# ---- classify: every distinct source's tier must be allowed to reach
+# Notion. A single disallowed source aborts the WHOLE run, before redaction
+# and before any write -- partial redaction is worse than none. ------------
+while IFS= read -r src; do
+  [ -z "$src" ] && continue
+  tier="$(classify_tier "$src")"
+  if ! assert_egress_ok "$tier" notion 2>"$TMP/egress.err"; then
+    echo "notion-sync: aborting -- a source's tier ($tier) may not reach Notion: $src" >&2
+    cat "$TMP/egress.err" >&2
+    exit 2
+  fi
+done < <(printf '%s' "$ROWS_JSON" | jq -r '[.[].source] | unique | .[]')
+
+# ---- redact. Fail closed: a redactor that cannot run means this run writes
+# NOTHING, not "writes unredacted content". ---------------------------------
+REDACTED_JSON="$(printf '%s' "$ROWS_JSON" | redact_rows_json)"
+rrc=$?
+if [ "$rrc" -eq 124 ]; then
+  exit 6
+elif [ $rrc -ne 0 ]; then
+  echo "notion-sync: aborting -- redaction unavailable (redactor exited $rrc)" >&2
+  exit 2
+fi
+
+# ---- upsert -----------------------------------------------------------------
+WORKER_OUT="$(printf '%s' "$REDACTED_JSON" \
+              | run_with_deadline "the sync worker (bin/notion-sync-upsert.py)" \
+                  python3 "$BIN_DIR/notion-sync-upsert.py" sync --ids "$IDS_JSON" \
+                    --sync-bases "$SYNC_BASES_JSON" $DRY_FLAG \
+                2>"$TMP/worker.err")"
+worker_rc=$?
+if [ "$worker_rc" -eq 124 ]; then
+  cat "$TMP/worker.err" >&2
+  exit 6
+fi
+sync_rc="$(map_worker_rc "$worker_rc")"
+if [ "$sync_rc" != "0" ]; then
+  echo "notion-sync: sync failed -- the run marker was NOT updated:" >&2
+  cat "$TMP/worker.err" >&2
+  exit "$sync_rc"
+fi
+
+# ---- report -----------------------------------------------------------------
+ROW_COUNT="$(printf '%s' "$ROWS_JSON" | jq 'length')"
+BASE_COUNT="$(printf '%s\n' $BASES | wc -l | tr -d ' ')"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "notion-sync: DRY RUN -- $ROW_COUNT row(s) across $BASE_COUNT base(s), nothing written"
+else
+  echo "notion-sync: processed $ROW_COUNT row(s) across $BASE_COUNT base(s)"
+fi
+TOTAL_C=0; TOTAL_U=0; TOTAL_A=0
+while IFS= read -r line || [ -n "$line" ]; do
+  [ -z "$line" ] && continue
+  b="$(jq -r '.base' <<<"$line")"
+  r="$(jq -r '.rows' <<<"$line")"
+  c="$(jq -r '.creates' <<<"$line")"
+  u="$(jq -r '.updates' <<<"$line")"
+  a="$(jq -r '.archived' <<<"$line")"
+  printf '  %-10s rows=%-4s creates=%-4s updates=%-4s archived=%-4s\n' "$b" "$r" "$c" "$u" "$a"
+  TOTAL_C=$((TOTAL_C + c)); TOTAL_U=$((TOTAL_U + u)); TOTAL_A=$((TOTAL_A + a))
+done <<<"$WORKER_OUT"
+printf '  %-10s          creates=%-4s updates=%-4s archived=%-4s\n' "TOTAL" "$TOTAL_C" "$TOTAL_U" "$TOTAL_A"
+
+if [ "$DRY_RUN" != "1" ]; then
+  mkdir -p "$(dirname "$NOTION_MARKER")"
+  date -u +%Y-%m-%d > "$TMP/marker.tmp" && mv "$TMP/marker.tmp" "$NOTION_MARKER"
+fi
+exit 0

@@ -1,0 +1,13 @@
+# Projects devbrain may plan/execute on. Adding a line here is a deliberate act by
+# you, the owner — treat it the same way you'd treat granting write access to a repo.
+#
+# A repo missing from BOTH this file and devbrain-projects.excluded is not silently
+# out of scope — devbrain-repo-audit flags it in the daily digest as unclassified,
+# so you notice and make an explicit decision either way.
+#
+# One repo name per line (must match the directory name under ~/dev/projects/).
+# Lines starting with # are comments. This file ships empty except for comments —
+# run setup.sh to populate it, or edit it by hand.
+#
+# Example (remove the leading '#' to enable):
+# example-repo

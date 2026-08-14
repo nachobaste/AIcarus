@@ -1,0 +1,103 @@
+#!/bin/bash
+# devbrain-heartbeat — watches system health. Alerts to Telegram ONLY when
+# something is actually broken. Sends DIRECT to the Telegram API (does not depend
+# on the messaging bridge, which is one of the things it watches). Runs every few
+# minutes via launchd/cron.
+#
+# Section 5 below: non-disruptive detection of the messaging bridge's Telegram
+# listener. See docs/wiki-example/lessons/ for the general shape of the lesson that
+# motivated this: an earlier, more frequent poll of Telegram's getUpdates endpoint
+# self-sabotaged (an observer effect) and caused flapping + auto-restarts that
+# killed tasks mid-run.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# REQUIRED, no hardcoded default: your own numeric Telegram chat id (see setup.sh /
+# @userinfobot). Without it this script logs the problem but cannot alert anyone.
+TG_ID="${DEVBRAIN_TG_CHAT_ID:-}"
+STATE="$HOME/.openclaw/logs/heartbeat.state"   # avoids spam: only alerts on change
+LOG="$HOME/.openclaw/logs/heartbeat.log"
+
+# Bot token (local, ideally on an encrypted disk). Read from the messaging
+# bridge's own config.
+TOKEN=$(python3 -c "import json;print(json.load(open('$HOME/.openclaw/openclaw.json')).get('channels',{}).get('telegram',{}).get('botToken',''))" 2>/dev/null)
+
+alert() {  # $1 = message
+  if [ -z "$TG_ID" ]; then
+    echo "[$(date)] NO CHAT ID configured (DEVBRAIN_TG_CHAT_ID), can't alert: $1" >>"$LOG"
+    return
+  fi
+  [ -z "$TOKEN" ] && { echo "[$(date)] NO TOKEN, can't alert: $1" >>"$LOG"; return; }
+  curl -s -m 10 "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TG_ID}" \
+    --data-urlencode "text=🚨 DevBrain alert: $1" >/dev/null 2>&1
+  echo "[$(date)] ALERT: $1" >>"$LOG"
+}
+
+PROBLEMS=""
+# 1. Messaging bridge gateway alive
+launchctl print gui/$(id -u)/ai.openclaw.gateway >/dev/null 2>&1 || PROBLEMS="$PROBLEMS bridge-down."
+pgrep -f "openclaw.*gateway" >/dev/null 2>&1 || PROBLEMS="$PROBLEMS gateway-no-process."
+# 2. Local LLM (Ollama) responds, if you're using that option
+curl -s -m 5 http://127.0.0.1:11434/api/tags >/dev/null 2>&1 || PROBLEMS="$PROBLEMS ollama-not-responding."
+# 3. Disk: alert if <15% free
+FREE=$(df / | awk 'NR==2{gsub("%","",$5); print 100-$5}')
+[ "${FREE:-100}" -lt 15 ] && PROBLEMS="$PROBLEMS low-disk(${FREE}%free)."
+
+# 4. History: an earlier version of this check polled Telegram's getUpdates every
+#    few minutes to see if the listener was alive, and that polling itself caused
+#    false positives (an observer effect) — it's been disabled since. At that
+#    point `openclaw gateway health` wasn't reliable either (running always false).
+#
+# 5. Re-investigated after a gateway/state-storage upgrade: `openclaw gateway
+#    health` became reliable, verified against many hours of real traffic on the
+#    same day (confirmed inbound/outbound messages in the bridge's own logs)
+#    without a single channel restart. `channels.telegram.running` and
+#    `.connected` stayed consistently `true` matching that real activity.
+#    (`lastInboundAt`/`lastOutboundAt` may not populate even with real traffic —
+#    don't rely on those two fields specifically, but running/connected do work.)
+#
+#    Non-disruptive check: only reads `openclaw gateway health --json` (opens no
+#    connections to Telegram itself, doesn't compete with the real listener).
+#    Requires 2 consecutive failures (spaced by this heartbeat's own interval,
+#    minutes apart) before alerting, to absorb a one-off gateway RPC hiccup.
+#    NEVER restarts anything — only alerts.
+TG_CHECK_FAILS="$HOME/.openclaw/logs/telegram-check-fails.count"
+FAILS=$(cat "$TG_CHECK_FAILS" 2>/dev/null || echo 0)
+case "$FAILS" in ''|*[!0-9]*) FAILS=0 ;; esac
+
+TG_HEALTH_OK=$(openclaw gateway health --json 2>/dev/null | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    ch=d.get('channels',{}).get('telegram',{})
+    print('true' if ch.get('running') and ch.get('connected') else 'false')
+except Exception:
+    print('unknown')
+" 2>/dev/null)
+
+case "$TG_HEALTH_OK" in
+  true)
+    echo "[$(date)] telegram-check: running+connected (healthy)." >>"$LOG"
+    echo 0 >"$TG_CHECK_FAILS"
+    ;;
+  false)
+    FAILS=$((FAILS + 1))
+    echo "$FAILS" >"$TG_CHECK_FAILS"
+    echo "[$(date)] telegram-check: running/connected false (consecutive failure #$FAILS)." >>"$LOG"
+    if [ "$FAILS" -ge 2 ]; then
+      PROBLEMS="$PROBLEMS telegram-listener-down(2+gateway-health-checks-false)."
+    fi
+    ;;
+  *)
+    echo "[$(date)] telegram-check: could not read gateway health, not counted." >>"$LOG"
+    ;;
+esac
+
+PREV=$(cat "$STATE" 2>/dev/null || echo "ok")
+if [ -n "$PROBLEMS" ]; then
+  [ "$PREV" != "$PROBLEMS" ] && alert "$PROBLEMS"   # only alerts on change
+  echo "$PROBLEMS" >"$STATE"
+else
+  [ "$PREV" != "ok" ] && alert "✅ recovered: everything is normal again."
+  echo "ok" >"$STATE"
+fi

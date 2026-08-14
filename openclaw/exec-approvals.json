@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "defaults": {
+    "security": "deny",
+    "ask": "off",
+    "askFallback": "deny",
+    "autoAllowSkills": false
+  },
+  "agents": {
+    "main": {
+      "security": "allowlist",
+      "ask": "off",
+      "askFallback": "deny",
+      "autoAllowSkills": false,
+      "allowlist": [
+        {
+          "pattern": "~/dev/machine-config/bin/devbrain"
+        },
+        {
+          "pattern": "~/dev/machine-config/bin/devbrain-queue"
+        }
+      ]
+    }
+  }
+}

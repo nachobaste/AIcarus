@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""wiki-linkcheck — deterministic outgoing-link checker for the wiki.
+
+Reports every internal link that does not resolve to a real file (and every
+anchor that does not resolve to a real heading), in both styles the wiki uses:
+
+    relative markdown   [supabase](../services/supabase.md)  ·  (page.md#anchor)
+    wikilinks           [[page-name]]  ·  [[page-name#anchor|alias]]
+
+Why this is a script and not a prompt: `devbrain-wiki-lint` used to ask the
+model to eyeball ~240 links. That is the blind-verification failure mode from
+wiki/lessons/verificacion-ciega-probar-el-instrumento.md — a check nobody
+proved could fail. File existence is decidable, so decide it.
+
+Usage:
+    wiki-linkcheck [VAULT]        # default ~/dev/wiki
+    wiki-linkcheck --quiet        # exit code only, no per-link output
+
+Exit codes:
+    0  no unresolved links
+    1  unresolved links found (listed on stdout, TAB-separated)
+    2  bad usage / vault not found
+"""
+import os
+import re
+import sys
+import unicodedata
+
+WIKILINK = re.compile(r'\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|[^\]]*)?\]\]')
+HEADING = re.compile(r'^#{1,6}\s+(.*?)\s*#*\s*$')
+# Inline code spans hold *examples* of links, not links. `SCHEMA.md` documents
+# the house link format inside backticks, and services/esta-maquina.md quotes
+# the BSD regex classes `[[:<:]]` / `[[:>:]]`. Treating those as links reported
+# five false positives on the first real run — and "fixing" them would have
+# corrupted the very line that defines the convention.
+CODE_SPAN = re.compile(r'(`+)(?:(?!\1).)*?\1')
+SKIP_DIRS = {".git", ".obsidian", ".trash", "node_modules"}
+
+# --- the two silent failures -------------------------------------------------
+# Both were found by hand, which is the problem: neither is reported by the
+# checks above. They do not fail loudly, they fail invisibly — a broken link
+# that is reported as neither broken nor present.
+
+# 1. A destination containing a raw space is not a link at all to markdown, so
+#    a normal link regex never matches it and nothing complains. This grabs
+#    anything link-SHAPED and lets the caller decide.
+LINK_SHAPED = re.compile(r'\[[^\]]*\]\(([^)]*)\)')
+# A markdown title after the destination is legal: (dest "title") / (dest 'title').
+TITLE_SUFFIX = re.compile(r'''\s+["'][^"']*["']\s*$''')
+
+# 2. Bare [slug] with no destination renders as literal text. The real case was
+#    a lesson page containing a slug-shaped bracket that looked exactly like a
+#    link. Deliberately narrow: requires a kebab slug with at least one hyphen,
+#    so prose like [1] or [sic] never trips it, and excludes wikilinks,
+#    reference links [a][b] and definitions [a]: url.
+#    The `(?=[a-z0-9._-]*[a-z])` is not decoration: without it this matched the
+#    `## [2026-08-05]` date headings that SCHEMA.md REQUIRES in log.md, and
+#    reported dozens of them on the real wiki against one true positive. The
+#    test suite passed the whole time — its fixture had no date-shaped bracket.
+BARE_BRACKET = re.compile(
+    r'(?<!\[)\[(?=[a-z0-9._-]*[a-z])([a-z0-9][a-z0-9._-]*-[a-z0-9._-]*)\](?!\(|\[|:|\])')
+# [label]: https://... defines a reference, which makes a later bare [label] a
+# legitimate shortcut link rather than stray text.
+REF_DEF = re.compile(r'^ {0,3}\[([^\]]+)\]:\s')
+
+
+def destination_of(raw):
+    """The destination part of a markdown link target, or None if malformed.
+
+    Returns None when the destination still holds whitespace after removing the
+    two legal ways to carry it: an <angle-bracket> wrapper and a quoted title.
+    """
+    raw = raw.strip()
+    if raw.startswith("<") and raw.endswith(">"):
+        return raw[1:-1]          # <a path with spaces.md> is legal markdown
+    raw = TITLE_SUFFIX.sub("", raw)
+    return None if re.search(r'\s', raw) else raw
+
+
+def strip_code_spans(line):
+    """Blank inline code, preserving length so nothing else shifts."""
+    return CODE_SPAN.sub(lambda m: " " * len(m.group(0)), line)
+
+
+def md_files(root):
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        found.extend(os.path.join(dirpath, f)
+                     for f in filenames if f.endswith(".md"))
+    return sorted(found)
+
+
+def slugify(text):
+    """GitHub-style anchor slug. Keeps letters/digits (accents included),
+    turns spaces into dashes, drops punctuation and emoji."""
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r'[*_~]', '', text)
+    out = []
+    for ch in text.lower():
+        if ch in (" ", "-"):
+            out.append("-")
+        elif ch == "_" or unicodedata.category(ch)[0] in ("L", "N"):
+            out.append(ch)
+    return re.sub(r'-+', '-', "".join(out)).strip("-")
+
+
+_anchor_cache = {}
+
+
+def anchors_of(path):
+    if path not in _anchor_cache:
+        found = set()
+        try:
+            with open(path, encoding="utf-8") as fh:
+                in_fence = False
+                for line in fh:
+                    if line.lstrip().startswith("```"):
+                        in_fence = not in_fence
+                        continue
+                    if in_fence:
+                        continue
+                    m = HEADING.match(line.rstrip("\n"))
+                    if m:
+                        found.add(slugify(m.group(1)))
+        except OSError:
+            pass
+        _anchor_cache[path] = found
+    return _anchor_cache[path]
+
+
+def check(vault):
+    files = md_files(vault)
+    by_base = {}
+    for f in files:
+        by_base.setdefault(os.path.splitext(os.path.basename(f))[0], []).append(f)
+
+    problems, n_md, n_wiki = [], 0, 0
+    for src in files:
+        try:
+            with open(src, encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        # A bare [label] is a legitimate shortcut link when [label]: url is
+        # defined somewhere in the same file, so collect those first.
+        refs = {m.group(1).lower() for m in
+                (REF_DEF.match(l) for l in lines) if m}
+        in_fence = False
+        for num, line in enumerate(lines, 1):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            line = strip_code_spans(line)
+
+            # Silent failure 2: brackets with no destination at all. Renders as
+            # literal text, so it is broken in a way nothing else reports.
+            for m in BARE_BRACKET.finditer(line):
+                if m.group(1).lower() not in refs:
+                    problems.append((src, num, m.group(0),
+                                     "brackets with no destination"))
+
+            # One pass over everything link-shaped. Unifying this with the
+            # spaced-destination check is what makes <angle bracket> targets
+            # resolve correctly too — before, they were reported "file not
+            # found" because nothing unwrapped them.
+            for m in LINK_SHAPED.finditer(line):
+                raw = destination_of(m.group(1))
+                if raw is None:
+                    problems.append((src, num, m.group(0),
+                                     "destination has a space"))
+                    continue
+                if not raw:
+                    continue
+                if re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', raw) or raw.startswith("//"):
+                    continue  # external scheme: http, mailto, collection, ...
+                if raw.startswith("#"):
+                    target, frag = src, raw[1:]
+                else:
+                    target, _, frag = raw.partition("#")
+                    target = os.path.normpath(
+                        os.path.join(os.path.dirname(src), target))
+                n_md += 1
+                if not os.path.exists(target):
+                    problems.append((src, num, raw, "file not found"))
+                elif frag and target.endswith(".md") \
+                        and slugify(frag) not in anchors_of(target):
+                    problems.append((src, num, raw, "anchor not found"))
+
+            for name, frag in WIKILINK.findall(line):
+                n_wiki += 1
+                hits = by_base.get(name.strip(), [])
+                if not hits:
+                    problems.append(
+                        (src, num, f"[[{name.strip()}]]", "no page with that name"))
+                elif frag and slugify(frag) not in anchors_of(hits[0]):
+                    problems.append(
+                        (src, num, f"[[{name.strip()}#{frag}]]", "anchor not found"))
+
+    return problems, {"files": len(files), "md": n_md, "wiki": n_wiki}
+
+
+def main(argv):
+    args = [a for a in argv[1:] if a != "--quiet"]
+    quiet = "--quiet" in argv[1:]
+    vault = os.path.expanduser(args[0] if args else "~/dev/wiki")
+    if not os.path.isdir(vault):
+        print(f"wiki-linkcheck: not a directory: {vault}", file=sys.stderr)
+        return 2
+
+    problems, stats = check(vault)
+    if not quiet:
+        print(f"scanned {stats['files']} files · {stats['md']} markdown links · "
+              f"{stats['wiki']} wikilinks")
+        print(f"unresolved: {len(problems)}")
+        for src, num, raw, why in problems:
+            print(f"{os.path.relpath(src, vault)}:{num}\t{why}\t{raw}")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

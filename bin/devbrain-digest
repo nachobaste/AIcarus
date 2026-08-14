@@ -1,0 +1,189 @@
+#!/bin/bash
+# devbrain-digest — daily summary (early morning). Git/PR activity + wiki changes +
+# pending research proposals + blocked tasks + unclassified repos. Written by
+# Claude Code (precise), delivered via Telegram. This job NEVER writes anything —
+# only reads and summarizes.
+#
+# This is the CORE digest. If you build your own personal read-only briefing
+# (email/calendar/tasks) on top of this system, keep it in a SEPARATE script and
+# treat it as personal-data tier (read live, answer, forget — see README.md) —
+# the starter kit deliberately ships without one, since it's specific to whatever
+# personal tools you use.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+ROOT_LIB="$(cd "$(dirname "$0")/.." && pwd)/lib"
+source "$ROOT_LIB/telegram.sh"   # tg_send_with_fallback
+source "$ROOT_LIB/queue.sh"      # fm_get (reading status: blocked)
+# Overridable so this script can be tested without ever calling out to the real
+# tools — otherwise `export PATH=...` two lines up defeats a PATH-prepend trick,
+# and a test that forgets this reaches the real messaging bridge and sends a live
+# Telegram digest.
+CLAUDE_BIN="${DEVBRAIN_DIGEST_CLAUDE_BIN:-claude}"
+OPENCLAW_BIN="${DEVBRAIN_DIGEST_OPENCLAW_BIN:-openclaw}"
+GH_BIN="${DEVBRAIN_DIGEST_GH_BIN:-gh}"
+PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
+WIKI_DIR="${DEVBRAIN_WIKI_DIR:-$HOME/dev/wiki}"
+QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"
+# How many days a pending decision (Proposals or Blocked) can sit before the digest
+# flags it visually instead of just quietly ageing. Exported so research_promote.py
+# below uses the exact same number — one knob, both sections, no risk of the two
+# disagreeing about what counts as old.
+export DEVBRAIN_DIGEST_STALE_DAYS="${DEVBRAIN_DIGEST_STALE_DAYS:-3}"
+LOG="${DEVBRAIN_DIGEST_LOG:-$HOME/.openclaw/logs/digest.log}"
+echo "[$(date)] digest start" >> "$LOG"
+
+# Collect last-24h activity per project (read-only)
+ACTIVITY=""
+for d in "$PROJECTS_DIR"/*/; do
+  [ -d "$d/.git" ] || continue
+  name=$(basename "$d")
+  commits=$(git -C "$d" log --since="24 hours ago" --pretty="  - %s (%an)" 2>/dev/null)
+  [ -n "$commits" ] && ACTIVITY="$ACTIVITY\n### $name\n$commits"
+done
+# Open PRs from devbrain, waiting on review
+PRS=$("$GH_BIN" search prs --author "@me" --state open --json repository,title,url 2>/dev/null \
+  --jq '.[] | "  - \(.title) → \(.url)"' 2>/dev/null | head -20)
+
+# Night report (written by devbrain-night)
+NIGHT=""
+[ -f "$QUEUE_DIR/night-report-latest.md" ] && NIGHT=$(cat "$QUEUE_DIR/night-report-latest.md")
+# Status board (shared knowledge across repos)
+BOARD=""
+for b in "$WIKI_DIR/status/"*.md; do
+  [ -e "$b" ] || continue
+  BOARD="$BOARD\n### $(basename "$b" .md)\n$(head -15 "$b")"
+done
+# What agents wrote to the wiki (system memory) in the last 24h — human eyes on it
+WIKIDIFF=$(git -C "$WIKI_DIR" log --since="24 hours ago" --stat 2>/dev/null | head -25)
+
+# What the messaging-bridge agent invoked in the last 24h — observability (silence
+# is the risky state). `openclaw audit` is metadata ONLY (which runs/tools ran, no
+# content). Additive and defensive: if it fails, this stays empty and the digest
+# continues (set -u, no -e).
+AUDIT=""
+if command -v "$OPENCLAW_BIN" >/dev/null 2>&1; then
+  SINCE_MS=$(( ($(date +%s) - 86400) * 1000 ))
+  AUDIT=$("$OPENCLAW_BIN" audit --after "$SINCE_MS" --json --limit 300 2>/dev/null | python3 -c '
+import json,sys
+from collections import Counter
+try:
+    ev=json.load(sys.stdin).get("events",[])
+except Exception:
+    sys.exit()
+if not ev: sys.exit()
+runs=sum(1 for e in ev if e.get("kind")=="agent_run")
+tools=[e for e in ev if e.get("kind")=="tool_action"]
+bad=[e for e in ev if e.get("status") not in ("succeeded","started","unknown",None)]
+byt=Counter(e.get("toolName","?") for e in tools)
+parts=", ".join(k+":"+str(v) for k,v in byt.most_common())
+line=str(runs)+" agent runs, "+str(len(tools))+" tool actions"
+if parts: line+=" ("+parts+")"
+print(line)
+for e in bad[:8]:
+    print("  ! "+str(e.get("kind"))+" "+str(e.get("status"))+" "+str(e.get("toolName") or e.get("action") or ""))
+' 2>/dev/null)
+fi
+
+# Proposals from the research shift waiting on a decision. This block bypasses the
+# AI summarizer below on purpose: a Telegram approval path (e.g. replying "dale 2")
+# needs the numbering to stay exact and stable. A model asked to "summarize" is
+# free to reword or drop a line; a plain append is not.
+PROPUESTAS=""
+BACKLOG_FILE="$WIKI_DIR/projects/mejoras-propuestas.md"
+if [ -f "$BACKLOG_FILE" ]; then
+  PROPUESTAS="$(python3 "$ROOT_LIB/research_promote.py" digest < "$BACKLOG_FILE" 2>>"$LOG")"
+fi
+
+# Repos that devbrain-repo-audit finds unclassified or not cloned locally —
+# textual, same reason as Proposals/Blocked: a repo name shouldn't pass through the
+# AI summarizer. Never fails the digest if the binary doesn't exist or `gh` doesn't
+# respond (set -u, no -e; the script itself returns 2 and prints nothing else in
+# that case).
+REPO_AUDIT_BIN="${DEVBRAIN_REPO_AUDIT_BIN:-$(dirname "$0")/devbrain-repo-audit}"
+SINCLASIFICAR=""
+if [ -x "$REPO_AUDIT_BIN" ]; then
+  AUDIT_OUT=$("$REPO_AUDIT_BIN" 2>>"$LOG")
+  SINCLASIFICAR=$(printf '%s\n' "$AUDIT_OUT" | awk -F'\t' '
+    $1 == "repo-no-clonado"     { print "  - " $2 " — not cloned locally (last push: " $3 ")" }
+    $1 == "repo-sin-clasificar" { print "  - " $2 " — not added to .allow or .excluded (last push: " $3 ")" }
+  ')
+fi
+
+# Blocked tasks: a missing permission stops being a silent failure and becomes a
+# named decision on the board — "add this line to devbrain-verify.commands".
+# Built separately and appended verbatim, same reason as the proposals section:
+# the exact command shouldn't pass through the AI summarizer.
+#
+# Age: there's no "when did this get blocked" date field in the frontmatter
+# (bin/devbrain-night only writes status + bloqueado_por), so the only signal
+# available is the file's last modification — a PROXY, not a confirmed blocking
+# date (see queue_file_age_days in lib/queue.sh). That's why it's marked with "~"
+# and "per last modification" instead of saying "blocked since".
+BLOQUEADAS=""
+for f in "$QUEUE_DIR"/*.plan.md; do
+  [ -e "$f" ] || continue
+  [ "$(fm_get "$f" status)" = "blocked" ] || continue
+  edad="$(queue_file_age_days "$f" 2>/dev/null)"
+  case "$edad" in ''|*[!0-9]*) edad="" ;; esac
+  sufijo=""
+  bullet="-"
+  if [ -n "$edad" ]; then
+    palabra="days"; [ "$edad" = "1" ] && palabra="day"
+    sufijo=" (blocked ~$edad $palabra ago, per last modification)"
+    [ "$edad" -ge "$DEVBRAIN_DIGEST_STALE_DAYS" ] && bullet="⚠️"
+  fi
+  BLOQUEADAS="${BLOQUEADAS}${bullet} $(basename "$f") → missing: \`$(fm_get "$f" bloqueado_por)\`${sufijo}
+"
+done
+
+if [ -z "$ACTIVITY" ] && [ -z "$PRS" ] && [ -z "$NIGHT" ] && [ -z "$AUDIT" ] && [ -z "$PROPUESTAS" ] && [ -z "$BLOQUEADAS" ] && [ -z "$SINCLASIFICAR" ]; then
+  MSG="☀️ Good morning. No code changes in the last 24h. All quiet."
+else
+  CONTEXT="Night report:\n${NIGHT:-(did not run)}\n\nGit activity last 24h:${ACTIVITY:-\n(none)}\n\nOpen PRs waiting on your review:\n${PRS:-  (none)}\n\nStatus board:\n${BOARD:-(empty)}\n\nWiki changes (24h):\n${WIKIDIFF:-(none)}\n\nMessaging-bridge agent actions in 24h (metadata):\n${AUDIT:-(none)}"
+  MSG=$(printf '%s' "$CONTEXT" | "$CLAUDE_BIN" -p \
+    "You are the user's assistant. With this raw data, write a BRIEF morning summary
+to read on a phone (max 160 words). Start with '☀️ Summary'.
+Structure: 1) what the night accomplished (PRs ready, failures), 2) what's waiting
+on a merge, 3) one line on the overall board status, 4) if the wiki changed, say so
+(it's the system's memory and worth knowing what got written), 5) what the
+messaging-bridge agent invoked — only if there were failed/blocked actions or an
+unusual volume, otherwise omit it.
+Do NOT mention 'proposals' or the research shift: that section is appended
+separately, verbatim, after your summary — mentioning it yourself would duplicate
+or paraphrase it. If there are repeated frictions, suggest ONE concrete improvement
+at the end. Be concrete, no filler. Data:
+$(cat)" 2>>"$LOG")
+  [ -z "$MSG" ] && MSG="☀️ Summary: there was activity but the generator failed. Check manually. (see digest.log)"
+fi
+
+# The proposals block is appended AFTER the AI-generated summary, verbatim — see
+# the comment above where PROPUESTAS is built.
+if [ -n "$PROPUESTAS" ]; then
+  MSG="$MSG
+
+📋 Proposals waiting on your decision:
+$PROPUESTAS"
+fi
+
+if [ -n "$BLOQUEADAS" ]; then
+  MSG="$MSG
+
+🚧 Blocked tasks, waiting for you to add the permission:
+$BLOQUEADAS"
+fi
+
+if [ -n "$SINCLASIFICAR" ]; then
+  MSG="$MSG
+
+🔍 Unclassified repos (add them to .allow or .excluded):
+$SINCLASIFICAR"
+fi
+
+# Telegram is not in the critical path for ALERTS elsewhere (bin/devbrain-night),
+# but the digest's entire job IS delivering this message — if it silently stays on
+# the gateway-only path and the gateway is down, nobody sees the proposals, nothing
+# gets approved, and the queue dries up again. tg_send_with_fallback tries the
+# bridge first (no extra API call in the common case) and only reaches for curl if
+# that fails.
+tg_send_with_fallback "$OPENCLAW_BIN" "$MSG" "$LOG"
+echo "[$(date)] digest sent" >> "$LOG"

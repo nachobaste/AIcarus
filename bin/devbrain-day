@@ -1,0 +1,85 @@
+#!/bin/bash
+# devbrain-day — the day-shift ritual: shows pending proposals from the research
+# shift, one at a time, and your "dale" (go ahead) writes them into the queue as
+# approved plans.
+#
+# The engine (lib/day.sh: day_apply) is the same one a Telegram-based approval
+# path would use — this command is just the terminal interface over that engine.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/lib/queue.sh"
+source "$ROOT/lib/day.sh"
+
+WIKI_DIR="${DEVBRAIN_WIKI_DIR:-$HOME/dev/wiki}"
+BACKLOG="$WIKI_DIR/projects/mejoras-propuestas.md"
+DAY_ENGINE="${DAY_ENGINE:-$ROOT/lib/day_engine.py}"
+export DAY_ENGINE
+export RESEARCH_ALLOWFILE="${RESEARCH_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
+
+if [ ! -f "$BACKLOG" ]; then
+  echo "No hay backlog todavía ($BACKLOG). Nada que decidir."
+  exit 0
+fi
+
+# Snapshot de títulos pendientes AL EMPEZAR esta corrida. Se procesan por título, no por
+# posición: si una decisión anterior modifica el backlog, la posición de las que faltan
+# podría desalinearse, pero el título de una propuesta ya mostrada nunca cambia.
+# No `mapfile`: bash 3.2 (macOS default) doesn't have it — see bin/devbrain-research's
+# pick_repos() for the same lesson, learned there first.
+TITULOS=()
+while IFS= read -r LINE; do
+  [ -n "$LINE" ] && TITULOS+=("$LINE")
+done < <(python3 "$DAY_ENGINE" list < "$BACKLOG")
+
+if [ "${#TITULOS[@]}" -eq 0 ]; then
+  echo "No hay propuestas pendientes. Nada que decidir hoy."
+  exit 0
+fi
+
+echo "${#TITULOS[@]} propuesta(s) pendiente(s)."
+echo
+
+DECIDIDAS=0
+for TITULO in "${TITULOS[@]}"; do
+  # Puede haber quedado decidida por una corrida anterior de esta misma sesión (no debería,
+  # cada título aparece una vez) o por otra fuente — 'show' se niega si ya no está pendiente.
+  DETALLE="$(python3 "$DAY_ENGINE" show "$TITULO" < "$BACKLOG" 2>/dev/null)" || continue
+
+  echo "────────────────────────────────────────"
+  printf '%s\n' "$DETALLE"
+  echo
+  printf 'Decisión (dale [A|B] / no / después) > '
+  read -r RESP || RESP=""
+
+  # Ante la duda, no aprobar: cualquier cosa que no sea exactamente "dale[ A|B]" o "no"
+  # se trata como "después". La respuesta ambigua nunca escribe nada.
+  case "$(printf '%s' "$RESP" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null)" in
+    dale | "dale a")
+      OUT="$(day_apply "$TITULO" dale "" A 2>&1)"; RC=$?
+      ;;
+    "dale b")
+      OUT="$(day_apply "$TITULO" dale "" B 2>&1)"; RC=$?
+      ;;
+    no)
+      printf 'Motivo del descarte (obligatorio) > '
+      read -r MOTIVO || MOTIVO=""
+      while [ -z "$(printf '%s' "$MOTIVO" | xargs 2>/dev/null)" ]; do
+        printf 'El motivo no puede quedar vacío — el research repite el mismo error sin él.\nMotivo > '
+        read -r MOTIVO || MOTIVO=""
+      done
+      OUT="$(day_apply "$TITULO" no "$MOTIVO" 2>&1)"; RC=$?
+      ;;
+    *)
+      echo "→ Queda pendiente para el próximo ciclo."
+      continue
+      ;;
+  esac
+
+  echo "$OUT"
+  [ $RC -eq 0 ] && DECIDIDAS=$((DECIDIDAS + 1))
+  echo
+done
+
+echo "────────────────────────────────────────"
+echo "Listo: $DECIDIDAS de ${#TITULOS[@]} decididas en esta corrida."

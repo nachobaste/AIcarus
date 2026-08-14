@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""devbrain-wiki-status-audit — narrow, mechanical fact-check of wiki claims
+against live GitHub state.
+
+devbrain-drift asks "do the knowledge stores agree with each other?".
+devbrain-stacked-pr-check asks "did a MERGED PR actually reach main?".
+This asks a third, different question: "does a specific sentence in the wiki
+still match reality?" It exists because status/service pages went stale for
+days to weeks without anything noticing, independently, in the same week:
+
+  1. A project status page said a PR was "sin mergear" (not yet merged) for
+     twelve days after that PR had actually merged and reached `main`, a gap
+     only found because someone happened to ask by hand.
+  2. A project's status page's "Layout" section listed files that only ever
+     existed on branches whose PRs closed without merging.
+  3. A services page said a recurring job's GitHub Actions double-scheduling
+     was "pendiente" (still pending) for eight days after it was actually
+     resolved.
+
+General "is this markdown still true" is not solvable reliably — prose
+understanding is not a grep. This script deliberately does NOT attempt that.
+It only checks two narrow, regex-extractable, mechanically-verifiable claim
+shapes, both against `gh`:
+
+  A. PR STATE CLAIMS in wiki/status/*.md and wiki/services/*.md: a bullet
+     that mentions a numbered PR ("PR #99", "[PR #9](.../pull/9)", a
+     slash/plus-separated run like "PR #147/#148/#149") together with a
+     Spanish/English state word (mergeado, sin mergear, abierto, cerrado,
+     esperando merge, ...). Checked against `gh pr view <N> --json state`.
+  B. GITHUB ACTIONS WORKFLOW STATE CLAIMS in wiki/services/*.md: a bullet
+     of the shape `` `job-id`: PALABRA `` (e.g. "`sync-job`: RESUELTO"),
+     where `job-id` is a key in machine-config/scrapers.tsv (the scheduled
+     scraper/job manifest). Checked against `gh workflow list --json state`
+     for that job's repo, ONLY when the repo has exactly one workflow (so
+     "which .yml is this job" is unambiguous without a second config file).
+
+Repo resolution for a PR mention, in priority order:
+  1. A markdown link to an actual github.com PR URL: the URL's own
+     owner/repo wins (most reliable — this is how a page about a repo owned
+     by someone other than the account's own owner still gets checked
+     correctly, since the link carries the true owner).
+  2. A backtick-wrapped repo name immediately before the mention (the
+     convention wiki/services/automations.md uses: "`machine-config` PR
+     #4") — only honored if that name is a known repo (present in
+     devbrain-projects.allow), to avoid treating an arbitrary backticked
+     word as a repo.
+  3. For wiki/status/<name>.md only: falls back to <name> itself (also
+     gated on devbrain-projects.allow) — confirmed by reading the wiki: every
+     status board's filename matches its repo's name 1:1.
+  4. Otherwise (a bare "PR #N" on a services page with no link and no
+     backtick-repo before it) the mention is skipped, not guessed at.
+
+QUOTING: a bullet that is narrating a **past, already-corrected** claim
+("Corregido: este board decia \"PR #99 sin mergear...\"") must not be
+re-flagged for the very state it says it already fixed. Text inside matching
+quote marks (straight " or curly " ") is masked out before any extraction
+runs, in both claim types — this is what stops an already-corrected line
+from producing false positives. Verified against real pages during
+development; see tests/test-devbrain-wiki-status-audit.sh fixtures modeled
+directly on them.
+
+KNOWN LIMITATIONS (deliberately not handled — precision over recall):
+  - A bare, unlinked "PR #N" on a status page is assumed to belong to that
+    page's own repo. A status page that mentions ANOTHER repo's PR number
+    in free prose without a link (not observed anywhere in the wiki as of
+    writing) would be misattributed. Not guarded against.
+  - Filename-derived and backtick-derived repos always assume owner
+    WIKI_STATUS_AUDIT_OWNER (required, no default -- see below). A bare
+    mention for a same-named repo under a different owner would resolve
+    wrong. (Only the link-based path — case 1 above — gets the owner right
+    in that situation.)
+  - "resuelto"/"RESUELTO" workflow claims are only checked when the SAME
+    bullet also says "apagado" or "activo"/"pendiente" — i.e. when the
+    claim maps onto `gh workflow list`'s state field. A services page can
+    document a second resolution mechanism (removing only the `schedule:`
+    trigger from inside the .yml while the workflow deliberately stays
+    `active`) that this script cannot see without fetching and parsing
+    workflow YAML — out of scope for v1. A "resuelto" claim with neither
+    qualifier is skipped, not guessed at.
+  - One claimed state per bullet, applied to every PR/job mentioned in it.
+    A bullet asserting two different states for two different PR numbers
+    would be mis-checked. Not observed in the current wiki.
+  - Markdown tables and headings are never scanned (only `- ` list items
+    are) — this is what keeps a page's "how it used to be (historical)"
+    table (repeating an old state word) from being misread as a current
+    claim.
+
+Read-only against GitHub (`gh pr view`, `gh workflow list`) and against the
+wiki/scrapers.tsv/devbrain-projects.allow on disk. Never writes anything.
+
+Usage:
+    devbrain-wiki-status-audit [--quiet]
+
+Output (TSV, one finding per line):
+    pr-estado-desactualizado\t<page>:<line>\t<owner>/<repo>#<N>\tclaim=<X>\tactual=<Y>
+    workflow-estado-desactualizado\t<page>:<line>\t<job-id> (<owner>/<repo>)\tclaim=<X>\tactual=<Y>
+
+Exit codes:
+    0  nothing to flag
+    1  findings printed (TSV on stdout)
+    2  a configured path does not exist, `gh` is not usable at all, or
+       WIKI_STATUS_AUDIT_OWNER is not set
+"""
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+WIKI = os.environ.get("WIKI_STATUS_AUDIT_WIKI", f"{HOME}/dev/wiki")
+ALLOWFILE = os.environ.get("WIKI_STATUS_AUDIT_ALLOWFILE",
+                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+SCRAPERS_TSV = os.environ.get("WIKI_STATUS_AUDIT_SCRAPERS_TSV",
+                               f"{HOME}/dev/machine-config/scrapers.tsv")
+GH_BIN = os.environ.get("WIKI_STATUS_AUDIT_GH", "gh")
+# No default: a real GitHub username baked in here as a fallback would
+# silently attribute every bare mention to the wrong account on anyone
+# else's machine. Must be set explicitly to the account's own GitHub username.
+OWNER = os.environ.get("WIKI_STATUS_AUDIT_OWNER")
+
+FINDING_PR = "pr-estado-desactualizado"
+FINDING_WORKFLOW = "workflow-estado-desactualizado"
+
+# --- claim vocabularies -------------------------------------------------
+# Order matters: first pattern that matches a bullet wins (see docstring
+# "One claimed state per bullet").
+PR_STATE_PATTERNS = [
+    ("MERGED", re.compile(r"\bmergead[oa]s?\b|\bmerged\b|\bfusionad[oa]s?\b", re.I)),
+    ("CLOSED", re.compile(r"\bcerrad[oa]s?\b", re.I)),
+    ("OPEN", re.compile(
+        r"\bsin\s+mergear\b|\bsin\s+fusionar\b|\bpendiente\s+de\s+merge\b"
+        r"|\besperando\s+merge\b|\babiert[oa]s?\b", re.I)),
+]
+
+WORKFLOW_MENTION_RE = re.compile(r"`([\w.\-]+)`:\s*(RESUELTO|resuelto|pendiente|activo|apagado)")
+
+LINK_PR_RE = re.compile(
+    r"\[(?:PR\s*)?#(\d+)\]\((https://github\.com/([\w.\-]+)/([\w.\-]+)/pull/(\d+))\)",
+    re.I)
+BARE_MULTI_PR_RE = re.compile(r"\bPRs?\s*#\d+(?:\s*[/+,]\s*#\d+)*", re.I)
+HASH_NUM_RE = re.compile(r"#(\d+)")
+BACKTICK_PREFIX_RE = re.compile(r"`([\w.\-]+)`\s*$")
+
+QUOTE_SPAN_RES = [
+    re.compile(r'"[^"\n]*"'),
+    re.compile("“[^”\n]*”"),
+]
+
+
+def warn(msg):
+    print(f"devbrain-wiki-status-audit: {msg}", file=sys.stderr)
+
+
+def read_names(path):
+    names = set()
+    if not os.path.isfile(path):
+        return names
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name = line.split("#", 1)[0].strip()
+            if name:
+                names.add(name)
+    return names
+
+
+def read_scrapers_repo_map(path):
+    """job_id -> repo, from machine-config/scrapers.tsv (TAB-separated:
+    id  repo  schedule  timeout_min  script). Soft-missing: an absent file
+    just means no workflow claims can be resolved, not a hard error."""
+    mapping = {}
+    if not os.path.isfile(path):
+        return mapping
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line or line.lstrip().startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) >= 2 and fields[0] and fields[1]:
+                mapping[fields[0]] = fields[1]
+    return mapping
+
+
+def mask_spans(text, spans):
+    """Replace text[start:end) for each (start, end) with spaces, preserving
+    length/offsets so later regex positions on the same string stay valid."""
+    chars = list(text)
+    for start, end in spans:
+        for i in range(start, end):
+            chars[i] = " "
+    return "".join(chars)
+
+
+def strip_quotes(text):
+    """Mask out anything inside matching quote marks. A bullet quoting its
+    own past wording ('este board decia "PR #99 sin mergear..."') must not
+    have that quoted claim re-extracted as a live one."""
+    spans = []
+    for rx in QUOTE_SPAN_RES:
+        for m in rx.finditer(text):
+            spans.append(m.span())
+    return mask_spans(text, spans)
+
+
+def extract_bullets(text):
+    """Yield (start_line_no, bullet_text) for each top-level '- ' list item.
+    A bullet runs until the next line starting a new bullet, a blank line,
+    a heading, or a table row -- whichever comes first. No nested bullets
+    exist anywhere in the current wiki (confirmed by grep before writing
+    this), so a flat one-level scan is enough."""
+    lines = text.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        if lines[i].startswith("- "):
+            start = i
+            buf = [lines[i]]
+            i += 1
+            while i < n:
+                ln = lines[i]
+                if (not ln.strip() or ln.startswith("- ")
+                        or ln.lstrip().startswith("#")
+                        or ln.lstrip().startswith("|")):
+                    break
+                buf.append(ln)
+                i += 1
+            yield start + 1, " ".join(buf)
+        else:
+            i += 1
+
+
+def classify_pr_state(scan_text):
+    for label, rx in PR_STATE_PATTERNS:
+        if rx.search(scan_text):
+            return label
+    return None
+
+
+def find_pr_mentions(scan_text, page_repo, allowed_repos):
+    """Returns a list of (owner, repo, pr_number, source) for one bullet's
+    already quote-stripped text. `source` is one of 'link', 'backtick',
+    'filename' -- purely informational, not used downstream."""
+    mentions = []
+    link_spans = []
+    for m in LINK_PR_RE.finditer(scan_text):
+        owner, repo, num = m.group(3), m.group(4), m.group(5)
+        mentions.append((owner, repo, num, "link"))
+        link_spans.append(m.span())
+
+    bare_text = mask_spans(scan_text, link_spans)
+    for m in BARE_MULTI_PR_RE.finditer(bare_text):
+        nums = HASH_NUM_RE.findall(m.group(0))
+        if not nums:
+            continue
+        preceding = bare_text[max(0, m.start() - 40):m.start()]
+        bt = BACKTICK_PREFIX_RE.search(preceding)
+        if bt and bt.group(1) in allowed_repos:
+            for num in nums:
+                mentions.append((OWNER, bt.group(1), num, "backtick"))
+        elif page_repo is not None:
+            for num in nums:
+                mentions.append((OWNER, page_repo, num, "filename"))
+        # else: services-page bare mention with no resolvable repo -- skip,
+        # per the documented limitation. Nothing to warn about per-mention
+        # (would be noisy); the docstring already logs this as a known gap.
+    return mentions
+
+
+def run(cmd):
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return proc.returncode == 0, proc.stdout, proc.stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, "", str(exc)
+
+
+def gh_pr_state(owner, repo, number, cache):
+    key = (owner, repo, number)
+    if key in cache:
+        return cache[key]
+    ok, out, err = run([GH_BIN, "pr", "view", number, "--repo", f"{owner}/{repo}",
+                        "--json", "state,mergedAt"])
+    if not ok:
+        warn(f"gh pr view failed for {owner}/{repo}#{number}: {err.strip()[:200]}")
+        cache[key] = None
+        return None
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        warn(f"gh pr view returned non-JSON for {owner}/{repo}#{number}")
+        cache[key] = None
+        return None
+    state = data.get("state")
+    cache[key] = state
+    return state
+
+
+def gh_workflow_state(owner, repo, cache):
+    key = (owner, repo)
+    if key in cache:
+        return cache[key]
+    ok, out, err = run([GH_BIN, "workflow", "list", "--repo", f"{owner}/{repo}",
+                        "--all", "--json", "name,state,path"])
+    if not ok:
+        warn(f"gh workflow list failed for {owner}/{repo}: {err.strip()[:200]}")
+        cache[key] = None
+        return None
+    try:
+        workflows = json.loads(out)
+    except json.JSONDecodeError:
+        warn(f"gh workflow list returned non-JSON for {owner}/{repo}")
+        cache[key] = None
+        return None
+    if len(workflows) != 1:
+        warn(f"{owner}/{repo}: {len(workflows)} workflows found, expected exactly "
+             f"1 to unambiguously map a job-id to a workflow -- skipping")
+        cache[key] = None
+        return None
+    state = workflows[0].get("state")
+    cache[key] = state
+    return state
+
+
+def classify_workflow_bucket(word, bullet_text):
+    """`word` is whatever followed `` `job-id`: `` directly. "apagado" and
+    "activo"/"pendiente" are unambiguous on their own. "resuelto"/"RESUELTO"
+    is not -- a services page can document two different resolution
+    mechanisms (disabling the workflow vs. only removing its schedule
+    trigger while it stays `active` on purpose) -- so it only resolves to a
+    bucket when the REST of the same bullet also says apagado/activo/
+    pendiente elsewhere. With no such qualifier, this returns None and the
+    caller skips the claim rather than guessing."""
+    word = word.lower()
+    if word == "apagado":
+        return "OFF"
+    if word in ("activo", "pendiente"):
+        return "ON"
+    if re.search(r"\bapagado\b", bullet_text, re.I):
+        return "OFF"
+    if re.search(r"\bactivo\b|\bpendiente\b", bullet_text, re.I):
+        return "ON"
+    return None
+
+
+def check_page(path, rel, page_repo, allowed_repos, scrapers_repo, pr_cache, wf_cache):
+    findings = []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+
+    for line_no, bullet in extract_bullets(text):
+        scan_text = strip_quotes(bullet)
+
+        # --- A. PR state claims -----------------------------------------
+        mentions = find_pr_mentions(scan_text, page_repo, allowed_repos)
+        if mentions:
+            claim = classify_pr_state(scan_text)
+            if claim:
+                for owner, repo, num, _src in mentions:
+                    actual = gh_pr_state(owner, repo, num, pr_cache)
+                    if actual and actual != claim:
+                        findings.append(
+                            (FINDING_PR, f"{rel}:{line_no}",
+                             f"{owner}/{repo}#{num}", f"claim={claim}", f"actual={actual}"))
+
+        # --- B. GitHub Actions workflow state claims --------------------
+        for m in WORKFLOW_MENTION_RE.finditer(scan_text):
+            job_id, word = m.group(1), m.group(2)
+            bucket = classify_workflow_bucket(word, scan_text)
+            if bucket is None:
+                continue
+            repo = scrapers_repo.get(job_id)
+            if not repo:
+                continue  # unknown job-id -- can't resolve without guessing
+            actual_state = gh_workflow_state(OWNER, repo, wf_cache)
+            if actual_state is None:
+                continue
+            actual_bucket = "ON" if actual_state == "active" else "OFF"
+            if actual_bucket != bucket:
+                findings.append(
+                    (FINDING_WORKFLOW, f"{rel}:{line_no}",
+                     f"{job_id} ({OWNER}/{repo})",
+                     f"claim={word}", f"actual={actual_state}"))
+    return findings
+
+
+def main(argv):
+    quiet = "--quiet" in argv[1:]
+
+    if not os.path.isdir(WIKI):
+        print(f"devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_WIKI no existe: {WIKI}",
+              file=sys.stderr)
+        return 2
+
+    if not OWNER:
+        print("devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_OWNER no esta seteado. "
+              "Setealo a tu propio usuario de GitHub -- no hay valor por defecto.",
+              file=sys.stderr)
+        return 2
+
+    ok, _, err = run([GH_BIN, "--version"])
+    if not ok:
+        print(f"devbrain-wiki-status-audit: gh no disponible ({GH_BIN}): {err.strip()[:200]}",
+              file=sys.stderr)
+        return 2
+
+    allowed_repos = read_names(ALLOWFILE)
+    scrapers_repo = read_scrapers_repo_map(SCRAPERS_TSV)
+
+    pages = (sorted(glob.glob(os.path.join(WIKI, "status", "*.md")))
+             + sorted(glob.glob(os.path.join(WIKI, "services", "*.md"))))
+
+    pr_cache = {}
+    wf_cache = {}
+    findings = []
+    for path in pages:
+        rel = os.path.relpath(path, WIKI)
+        base = os.path.basename(path)
+        if base == "TEMPLATE.md":
+            continue
+        is_status_page = os.path.dirname(path).endswith(f"{os.sep}status")
+        stem = base[:-3]
+        page_repo = stem if (is_status_page and stem in allowed_repos) else None
+        findings.extend(check_page(path, rel, page_repo, allowed_repos,
+                                    scrapers_repo, pr_cache, wf_cache))
+
+    if not quiet:
+        for row in findings:
+            print("\t".join(row))
+        print(f"wiki-status-audit: {len(findings)}")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

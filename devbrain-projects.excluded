@@ -1,0 +1,18 @@
+# Repos deliberately excluded from devbrain-repo-audit's monitoring and from
+# devbrain's execution scope. Each line is a decision you made, with its reason —
+# adding a line here is a deliberate act, same as in devbrain-projects.allow.
+#
+# A repo listed here stops appearing in the digest even if it's not in .allow and
+# not cloned locally. NOT listing it here (and not being in .allow) is what makes
+# devbrain-repo-audit flag it as "repo-sin-clasificar" (unclassified).
+#
+# Format: name  # reason
+#
+# machine-config (or whatever you name your devbrain checkout) and any repo that
+# holds this system's own code/config should always be excluded here — letting
+# devbrain touch its own security allowlist unattended means a nightly loop could
+# modify its own permissions with nobody watching. See docs/wiki-example/lessons/
+# for the general shape of that lesson.
+#
+# Example (edit to match your own devbrain checkout's directory name):
+# machine-config  # this repo's own code — interactive-only, never nightly

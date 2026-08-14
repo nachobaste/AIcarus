@@ -1,0 +1,448 @@
+#!/bin/bash
+# devbrain-research — the research shift: read a repo, report gaps, never touch it.
+#
+# Why this exists: the nightly runner once produced eight consecutive "0 done,
+# 0 failed" reports in a row. Nothing had failed — the approved queue was
+# simply empty, and nothing generates candidate work between weekly
+# interviews. This is the missing piece: the night investigates, the morning
+# digest proposes, the owner decides in a day-shift.
+#
+# Read-only by construction: the session gets no Write, no Edit, no MCP. The
+# findings file is appended by THIS script from captured stdout, the same way
+# devbrain-wiki-lint handles its summary — the model never holds a pen.
+#
+# Design: ~/dev/queue/190-machine-config--devbrain-research-motor.plan.md
+# Spec:   ~/dev/wiki/projects/devbrain-nocturno.md
+#
+# Attention budget (set in a weekly interview): 50% internal gaps, 30% links
+# between projects, 20% external exploration. Spent by ROTATION ACROSS NIGHTS,
+# never split inside one run — three shallow sweeps in one session are worth less
+# than one good one.
+#
+# Usage:
+#     devbrain-research <repo>                   # scope internas (default)
+#     devbrain-research --scope internas <repo>
+#     devbrain-research --scope conexiones       # picks its own repos, multi-repo
+#     devbrain-research --scope externo          # routed, and refuses: see below
+#     devbrain-research --next-bucket            # print+advance the budget, no model
+#
+# Exit codes:
+#     0  ran (findings may be zero — that is a legitimate outcome)
+#     2  invalid repo name / bad usage
+#     3  repo refused (not in the allowlist, or the devbrain installation itself)
+#     4  repo directory not found
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/lib/queue.sh"     # with_timeout
+
+PROJECTS_DIR="${RESEARCH_PROJECTS_DIR:-$HOME/dev/projects}"
+ALLOWFILE="${RESEARCH_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
+WIKI="${RESEARCH_WIKI:-$HOME/dev/wiki}"
+BACKLOG="${RESEARCH_BACKLOG:-$WIKI/projects/mejoras-propuestas.md}"
+LOG="${RESEARCH_LOG:-$HOME/.openclaw/logs/research.log}"
+CLAUDE_BIN="${RESEARCH_CLAUDE_BIN:-claude}"
+MAX="${RESEARCH_MAX:-5}"
+
+STATE_DIR="${RESEARCH_STATE_DIR:-$HOME/.openclaw/state}"
+BUDGET_FILE="$STATE_DIR/research-budget"
+ROTATION_FILE="$STATE_DIR/research-rotation"
+CONEXIONES_MAX_REPOS="${RESEARCH_MAX_REPOS:-3}"
+
+# The 50/30/20 budget as an explicit 10-slot cycle rather than a random draw.
+# Deterministic means the distribution is a fact the tests can assert exactly,
+# instead of a statistical claim that passes four times out of five. Spread, not
+# clustered, so a week never spends three connection nights back to back.
+BUCKET_CYCLE=(internas conexiones internas externo internas
+              conexiones internas internas conexiones externo)
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
+
+# Reads the counter, prints this run's bucket, advances. Absent or corrupt state
+# starts at 0 — the budget going wrong must never be what stops a night.
+next_bucket() {
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  local i=0
+  [ -f "$BUDGET_FILE" ] && i="$(tr -cd '0-9' < "$BUDGET_FILE" 2>/dev/null)"
+  [ -n "$i" ] || i=0
+  echo "${BUCKET_CYCLE[$((i % ${#BUCKET_CYCLE[@]}))]}"
+  echo $(((i + 1) % ${#BUCKET_CYCLE[@]})) > "$BUDGET_FILE" 2>/dev/null || true
+}
+
+# Rotates through the allowlist so connection nights do not always read the same
+# three repos. Reading every repo at once inflates context and degrades findings,
+# which is why this is a window and not a full sweep.
+pick_repos() {
+  # No `mapfile`: this machine runs bash 3.2, where it does not exist.
+  # See wiki/services/esta-maquina.md — the file that lists exactly this trap,
+  # which I read and then walked into anyway.
+  local all=() count offset out=() line
+  while IFS= read -r line; do
+    [ -n "$line" ] && all+=("$line")
+  done < <(grep -v '^#' "$ALLOWFILE" 2>/dev/null | grep -v '^[[:space:]]*$')
+  count=${#all[@]}
+  [ "$count" -gt 0 ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  offset=0
+  [ -f "$ROTATION_FILE" ] && offset="$(tr -cd '0-9' < "$ROTATION_FILE" 2>/dev/null)"
+  [ -n "$offset" ] || offset=0
+  local n=$((CONEXIONES_MAX_REPOS < count ? CONEXIONES_MAX_REPOS : count))
+  for ((k = 0; k < n; k++)); do
+    out+=("${all[$(((offset + k) % count))]}")
+  done
+  echo $(((offset + n) % count)) > "$ROTATION_FILE" 2>/dev/null || true
+  printf '%s\n' "${out[@]}"
+}
+
+# Permissions for every session this script starts — ONE definition, shared by the
+# survey pass and the deeper promotion pass. Two copies drift, and the copy that
+# drifts is the one that quietly gains a pen. No Write, no Edit, no MCP, ever.
+# Paths built from $HOME rather than hardcoded so this still refuses the right
+# directories on a different machine, under a different username.
+DISALLOWED="mcp__*,Read(/$HOME/.openclaw/**),Read(/$HOME/.ssh/**)"
+ALLOWED_READONLY="Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(rg:*)"
+
+# --- arguments ----------------------------------------------------------------
+SCOPE="internas"
+REPO=""
+PROMOTE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --next-bucket) next_bucket; exit 0 ;;
+    --promote) PROMOTE=1; shift ;;
+    --scope) SCOPE="${2:-}"; shift 2 || true ;;
+    -*) echo "ERROR: opcion desconocida: $1"; exit 2 ;;
+    *) REPO="$1"; shift ;;
+  esac
+done
+
+case "$SCOPE" in
+  internas|conexiones|externo) ;;
+  *) echo "ERROR: scope invalido: '$SCOPE' (internas|conexiones|externo)"; exit 2 ;;
+esac
+
+# The external bucket is ROUTED but REFUSES to run. It needs WebSearch/WebFetch,
+# and enabling network access in an unattended session is the same class of
+# decision already scoped in a prior planning session (plan 180) — it gets its
+# own discussion, not a quiet arrival inside this one. Deliberately no network
+# tool anywhere on this path.
+if [ "$SCOPE" = "externo" ]; then
+  echo "bucket externo pendiente de decision de permisos (sin acceso a red)"
+  log "externo: omitido — pendiente de decision de permisos de red"
+  exit 0
+fi
+
+# --- promotion: raw backlog -> the 2-3 proposals the owner actually decides on --
+# Runs on what is already written down; it never searches for new findings. The
+# selection criteria live in lib/research_promote.py, in the open, so they can be
+# argued with — a ranking hidden in a prompt is a ranking nobody can audit.
+if [ "$PROMOTE" = "1" ]; then
+  [ -f "$BACKLOG" ] || { echo "nada que promover (no hay backlog)"; exit 0; }
+  SELECTED="$(mktemp)"; PROPOSALS="$(mktemp)"
+  trap 'rm -f "$SELECTED" "$PROPOSALS"' EXIT
+  SEL_SUMMARY="$(python3 "$ROOT/lib/research_promote.py" select < "$BACKLOG" 2>&1 >"$SELECTED")"
+  log "promote: $SEL_SUMMARY"
+  if [ ! -s "$SELECTED" ]; then
+    echo "nada que promover"; log "promote: nada que promover"; exit 0
+  fi
+
+  : > "$PROPOSALS"
+  # One deep pass per finding, not one pass for all of them. "Profunda" is the whole
+  # point of this stage; three findings sharing one session get a third of the
+  # attention each and the result reads like the backlog it came from.
+  while IFS= read -r TITULO; do
+    [ -n "$TITULO" ] || continue
+    BLOQUE="$(awk -v t="### $TITULO" '$0==t{f=1} f{print} f && /^$/ && NR>1{if(seen)exit; seen=1}' "$SELECTED")"
+    FREPO="$(printf '%s' "$BLOQUE" | sed -n 's/^- repo: //p' | head -1)"
+    [ -n "$FREPO" ] || continue
+    FDIR="$PROJECTS_DIR/$FREPO"
+    [ -d "$FDIR" ] || { log "promote: repo inexistente para '$TITULO'"; continue; }
+
+    OUT="$(mktemp)"
+    {
+      cat <<PROMPTP
+Sos el research shift de devbrain, en la etapa de PROFUNDIZACION.
+
+Este hallazgo ya paso el filtro de citas y fue elegido para convertirse en una propuesta
+que el dueño del sistema decide en cinco minutos. Esta en el repo \`$FREPO\` ($FDIR):
+
+$BLOQUE
+
+Investigá a fondo y devolvé UNA propuesta. Reglas duras:
+1. Los archivos que nombres tienen que EXISTIR. Abrilos, no los adivines.
+2. **Minimo DOS opciones reales, y tienen que tocar archivos DISTINTOS.** Dos opciones
+   sobre los mismos archivos son una sola escrita dos veces, y se descarta la propuesta
+   entera. Si de verdad solo hay un camino, decilo en 'riesgos' y dejá una sola opcion:
+   se va a descartar, y esta bien — es informacion, no relleno.
+3. No escribas 'origen': eso lo pone el sistema.
+
+FORMATO EXACTO, sin texto alrededor:
+
+### <titulo de la propuesta>
+- repo: $FREPO
+- esfuerzo: <cuantas noches>
+- riesgos: <que puede salir mal>
+- verificar: <como se sabria que quedo bien>
+
+#### Opcion A — <nombre corto>
+- archivos: <paths separados por coma>
+- pros: <texto>
+- contras: <texto>
+
+#### Opcion B — <nombre corto>
+- archivos: <paths separados por coma, distintos de los de A>
+- pros: <texto>
+- contras: <texto>
+PROMPTP
+    } | with_timeout 900 "$CLAUDE_BIN" -p --model opus --permission-mode plan \
+          --disallowedTools "$DISALLOWED" --allowedTools "$ALLOWED_READONLY" \
+          > "$OUT" 2>>"$LOG"
+
+    # The system owns the attribution: a model that misattributes a proposal would
+    # silently mark the wrong finding as promoted and the real one would come back
+    # every night.
+    # --origen makes the attribution the system's, not the model's. It was shell text
+    # munging first; `sed 0,/re/` and `\n` in a replacement are GNU-only and silently
+    # did nothing on this BSD machine, so nothing marked the finding as promoted and it
+    # would have come back every night. See CLAUDE.md on BSD utilities.
+    VAL="$(RESEARCH_REPO_ROOT="$FDIR" python3 "$ROOT/lib/research_promote.py" \
+             validate --origen "$TITULO" < "$OUT" 2>&1 >>"$PROPOSALS" || true)"
+    log "promote '$TITULO': $VAL"
+    case "$VAL" in
+      "propuestas: 0"*)
+        KEEPP="${RESEARCH_RAW_DIR:-$(dirname "$LOG")}/raw-promote-$(date '+%Y%m%d-%H%M%S')-$$.md"
+        cp "$OUT" "$KEEPP" 2>/dev/null && log "promote '$TITULO': cruda en $KEEPP" ;;
+    esac
+    rm -f "$OUT"
+  done < <(grep '^### ' "$SELECTED" | sed 's/^### //')
+
+  if [ -s "$PROPOSALS" ]; then
+    { echo; echo "## Propuestas — $(date '+%Y-%m-%d')"; echo; cat "$PROPOSALS"; } >> "$BACKLOG"
+    echo "propuestas nuevas: $(grep -c '^### ' "$PROPOSALS")"
+  else
+    echo "ninguna propuesta paso la validacion"
+    log "promote: 0 propuestas validas"
+  fi
+  exit 0
+fi
+
+if [ "$SCOPE" = "internas" ] && [ -z "$REPO" ]; then
+  echo "usage: devbrain-research <repo> | --scope conexiones | --scope externo"
+  exit 2
+fi
+
+# --- which repos this run reads -----------------------------------------------
+REPOS=()
+if [ "$SCOPE" = "conexiones" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && REPOS+=("$line")
+  done < <(pick_repos)
+  if [ "${#REPOS[@]}" -lt 2 ]; then
+    echo "ERROR: conexiones necesita al menos 2 repos en el allowlist, hay ${#REPOS[@]}"
+    log "conexiones: abortado, ${#REPOS[@]} repo(s) disponibles"
+    exit 3
+  fi
+else
+  REPOS=("$REPO")
+fi
+
+# --- validation ---------------------------------------------------------------
+# Every repo goes through the same gate, so the multi-repo path cannot become a
+# way in for something the single-repo path would have refused.
+for R in "${REPOS[@]}"; do
+  if ! [[ "$R" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "ERROR: invalid repo name: $R"; exit 2
+  fi
+done
+REPO="${REPOS[0]}"
+
+# The devbrain installation itself is refused here, regardless of the allowlist.
+# The allowlist is a file anyone can edit, and the installation's own root holds
+# openclaw/exec-approvals.json — the limit on what an unattended agent may run —
+# so its exclusion must not depend on a line in a file staying absent, or on
+# matching one particular repo name that could change. Instead this checks
+# structurally: devbrain-projects.allow only ever lives at the root of the
+# devbrain installation itself, never inside a project devbrain manages, so a
+# project directory that contains that file at its own root IS the installation,
+# by construction. See wiki/lessons/machine-config-nunca-nocturno.md.
+ROOTS=""
+for R in "${REPOS[@]}"; do
+  PDIR="$PROJECTS_DIR/$R"
+  if [ -f "$PDIR/devbrain-projects.allow" ]; then
+    echo "ERROR: $R is the devbrain installation itself — never investigated unattended (interactive-only)."
+    echo "       Ver wiki/lessons/machine-config-nunca-nocturno.md"
+    log "refused $R (is the devbrain installation itself)"
+    exit 3
+  fi
+  if ! grep -v '^#' "$ALLOWFILE" 2>/dev/null | grep -qxF "$R"; then
+    echo "ERROR: $R is not in the devbrain allowlist ($ALLOWFILE). You must add it explicitly."
+    log "refused $R (not in allowlist)"
+    exit 3
+  fi
+  if [ ! -d "$PDIR" ]; then
+    echo "ERROR: repo not found: $PDIR"; log "refused $R (no dir)"; exit 4
+  fi
+  ROOTS="${ROOTS}${R}=${PDIR}"$'\n'
+done
+DIR="$PROJECTS_DIR/$REPO"
+
+# --- context fed to the session ----------------------------------------------
+mkdir -p "$(dirname "$BACKLOG")" "$(dirname "$LOG")"
+[ -f "$BACKLOG" ] || cat > "$BACKLOG" <<'HEADER'
+# Mejoras propuestas
+
+> Backlog del research shift (`devbrain-research`). Cada hallazgo cita un
+> `archivo:linea` real, verificado automaticamente antes de entrar aca — lo que no
+> resuelve se descarta y se cuenta en el log, nunca se guarda.
+>
+> Esto es materia prima. Lo que llega al dueño son las 2-3 propuestas profundas que
+> produce la promocion, no esta lista.
+
+HEADER
+
+STATUS_TEXT=""
+for R in "${REPOS[@]}"; do
+  if [ -f "$WIKI/status/$R.md" ]; then
+    STATUS_TEXT="${STATUS_TEXT}--- $R ---"$'\n'"$(cat "$WIKI/status/$R.md")"$'\n'
+  fi
+done
+[ -n "$STATUS_TEXT" ] || STATUS_TEXT="(sin pagina de status)"
+# Titles already in the backlog, so the session does not spend its run re-finding
+# what is already written down. Extracted here, not asked of the model.
+KNOWN="$(grep '^### ' "$BACKLOG" 2>/dev/null | sed 's/^### //' || true)"
+[ -n "$KNOWN" ] || KNOWN="(el backlog esta vacio)"
+
+RAW="$(mktemp)"; trap 'rm -f "$RAW"' EXIT
+
+if [ "$SCOPE" = "conexiones" ]; then
+  REPOLIST=""
+  for R in "${REPOS[@]}"; do REPOLIST="${REPOLIST}- \`$R\` en $PROJECTS_DIR/$R"$'\n'; done
+  SEEDS="$(sed -n '/^## Conexiones de ecosistema/,/^## /p' "$WIKI/projects/portfolio.md" 2>/dev/null | head -30)"
+  [ -n "$SEEDS" ] || SEEDS="(no se pudo leer portfolio.md)"
+fi
+
+{
+if [ "$SCOPE" = "conexiones" ]; then
+  cat <<PROMPTC
+Eres el research shift de devbrain, en el bucket CONEXIONES. Estas leyendo estos repos:
+
+$REPOLIST
+Mas el wiki en $WIKI.
+
+Tu trabajo es encontrar CONEXIONES REALES entre proyectos: donde uno podria alimentar,
+simplificar o dar contexto a otro, y todavia no lo hace.
+
+Estas conexiones ya estan identificadas en el portfolio y nunca se priorizaron.
+Evaluá las que apliquen a los repos de arriba contra el CODIGO REAL — ¿siguen vigentes?
+¿cual esta mas cerca de ser posible? — y buscá ademas conexiones no listadas:
+
+$SEEDS
+
+REGLAS DURAS:
+1. Cada hallazgo DEBE citar \`archivo:linea\` reales de AL MENOS DOS repos distintos. Un
+   hallazgo que cita un solo repo NO es una conexion y se descarta entero, automaticamente.
+   No adivines numeros de linea: abri el archivo y mira.
+2. Nada de obviedades de infraestructura ("ambos usan Supabase", "ambos son TypeScript").
+   Una conexion es un dato o una capacidad concreta de un repo que le serviria al otro.
+3. Cada hallazgo necesita un por-que-importa concreto, no generico.
+4. Maximo $MAX hallazgos. Preferi pocos y solidos.
+5. Si no encontras nada que cumpla estas reglas, no devuelvas nada. "Nada" es un resultado
+   legitimo; rellenar no lo es.
+
+FORMATO EXACTO por hallazgo (sin texto alrededor):
+
+### <titulo en una linea>
+- repo: <repo-a> + <repo-b>
+- evidencia: <repo-a/archivo:linea>, <repo-b/archivo:linea>
+- porque: <una o dos lineas, concreto>
+- tamano: <cuantas noches de trabajo>
+
+OJO con las rutas de evidencia: escribilas relativas a la raiz del repo que corresponda.
+
+Ya estan anotados estos hallazgos, NO los repitas:
+$KNOWN
+
+Status boards actuales:
+$STATUS_TEXT
+PROMPTC
+else
+  cat <<PROMPT
+Eres el research shift de devbrain. Estas leyendo el repo \`$REPO\` en \`$DIR\`.
+
+Tu trabajo es encontrar BRECHAS INTERNAS reales y verificables:
+- que esta prometido en docs/wiki y no esta construido
+- que esta construido y no esta documentado
+- que dice el status board que ya no es cierto
+- deuda tecnica ya señalada y todavia sin resolver
+
+REGLAS DURAS:
+1. Cada hallazgo DEBE citar al menos un \`archivo:linea\` real de este repo. Una cita
+   que no resuelva hace que el hallazgo se descarte entero. No adivines numeros de
+   linea: abri el archivo y mira.
+2. No propongas construir cosas que ya existen. En particular ya existen
+   \`devbrain-drift\` (drift entre almacenes de conocimiento), \`wiki-linkcheck\`
+   (enlaces de la wiki) y \`notion-sync-check\`. Si detectas algo que esas cubren,
+   citalas en vez de proponer construirlas.
+3. Maximo $MAX hallazgos. Preferi pocos y solidos: uno inventado cuesta mas que diez
+   que no encontraste.
+4. Si no encontras nada que cumpla estas reglas, no devuelvas nada. "Nada" es un
+   resultado legitimo; rellenar no lo es.
+
+FORMATO EXACTO por hallazgo (sin texto alrededor):
+
+### <titulo en una linea>
+- repo: $REPO
+- evidencia: <archivo:linea>
+- porque: <una o dos lineas>
+- tamano: <cuantas noches de trabajo>
+
+Ya estan anotados estos hallazgos, NO los repitas:
+$KNOWN
+
+Status board actual del repo:
+$STATUS_TEXT
+PROMPT
+fi
+} | with_timeout 900 "$CLAUDE_BIN" -p --model opus --permission-mode plan \
+      --disallowedTools "$DISALLOWED" \
+      --allowedTools "$ALLOWED_READONLY" \
+      > "$RAW" 2>>"$LOG"
+RC=$?
+if [ $RC -ne 0 ]; then
+  log "$REPO: la sesion de research fallo (rc=$RC)"
+  echo "ERROR: la sesion de research fallo (rc=$RC) — ver $LOG"
+  exit 0   # a failed research run must never take down the night
+fi
+
+# --- filter, then append ------------------------------------------------------
+FILTERED="$(mktemp)"; trap 'rm -f "$RAW" "$FILTERED"' EXIT
+MIN_REPOS=1
+[ "$SCOPE" = "conexiones" ] && MIN_REPOS=2
+SUMMARY="$(RESEARCH_REPO_ROOTS="$ROOTS" RESEARCH_MIN_REPOS="$MIN_REPOS" \
+           RESEARCH_EXISTING="$BACKLOG" RESEARCH_MAX="$MAX" \
+           python3 "$ROOT/lib/research_filter.py" < "$RAW" 2>&1 >"$FILTERED")"
+
+# Label the run by what it actually read. Saying "some-other-repo:" after a
+# session that read three repos is a small lie that makes the log unreadable
+# later.
+LABEL="$REPO"
+[ "$SCOPE" = "conexiones" ] && LABEL="conexiones($(printf '%s,' "${REPOS[@]}" | sed 's/,$//'))"
+log "$LABEL: $SUMMARY"
+echo "$LABEL: $SUMMARY"
+
+if [ -s "$FILTERED" ]; then
+  { echo; echo "## $(date '+%Y-%m-%d') — $LABEL"; echo; cat "$FILTERED"; } >> "$BACKLOG"
+else
+  log "$REPO: nada nuevo que anotar"
+fi
+
+# If the run produced findings and the filter rejected every one of them, keep the
+# raw output. That combination means either the model fabricated everything or the
+# filter is wrong, and those need opposite fixes — you cannot tell which from a
+# count alone. Learned the hard way: the first real run discarded 5 of 5 and the
+# evidence was already deleted.
+if [ ! -s "$FILTERED" ] && grep -q '^### ' "$RAW" 2>/dev/null; then
+  KEEP="${RESEARCH_RAW_DIR:-$(dirname "$LOG")}/raw-$REPO-$(date '+%Y%m%d-%H%M%S').md"
+  cp "$RAW" "$KEEP" 2>/dev/null && log "$REPO: se descarto todo — salida cruda en $KEEP"
+fi

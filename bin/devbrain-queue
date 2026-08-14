@@ -1,0 +1,95 @@
+#!/bin/bash
+# devbrain-queue — deterministic manager of ~/dev/queue. NO model calls.
+# Telegram-safe: the LLM router forwards "add X to the queue" here. Approval happens
+# ONLY in devbrain-interview (it writes the 'aprobado:' key); the night runner refuses
+# without it.
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"
+LIB="$(cd "$(dirname "$0")/.." && pwd)/lib"
+source "$LIB/queue.sh"
+source "$LIB/day.sh"
+DAY_ENGINE="${DAY_ENGINE:-$LIB/day_engine.py}"; export DAY_ENGINE
+mkdir -p "$QUEUE_DIR"
+
+usage() { echo "usage: devbrain-queue add <repo> \"<task>\" | list | pause <file> | resume <file> | dale <n> | no <n> \"<motivo>\""; exit 1; }
+[ $# -ge 1 ] || usage
+
+
+# resolve_pendiente <n> -> prints the title of the n-th pending proposal in the LIVE
+# backlog, or nothing (caller checks emptiness). Resolved fresh on every call: Telegram
+# is not a continuous walkthrough like an interactive terminal session, so "the current
+# cycle" means whatever is pending right now, not a snapshot from an earlier digest.
+resolve_pendiente() {
+  local n="$1" wiki_dir backlog
+  wiki_dir="${DEVBRAIN_WIKI_DIR:-$HOME/dev/wiki}"
+  backlog="$wiki_dir/projects/mejoras-propuestas.md"
+  [ -f "$backlog" ] || return 1
+  python3 "$DAY_ENGINE" list < "$backlog" | sed -n "${n}p"
+}
+
+case "$1" in
+add)
+  [ $# -ge 3 ] || usage
+  REPO="$2"; TASK="$3"
+  [[ "$REPO" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "ERROR: invalid repo name"; exit 2; }
+  SLUG="$(queue_slugify "$TASK")"
+  NN="$(queue_next_nn "$QUEUE_DIR")"
+  F="$QUEUE_DIR/$NN-$REPO--$SLUG.plan.md"
+  {
+    echo "---"
+    echo "repo: $REPO"
+    echo "status: solicitado"
+    echo "prioridad: $NN"
+    echo "creado: $(date +%Y-%m-%d)"
+    echo "---"
+    echo ""
+    echo "## Tarea solicitada"
+    echo ""
+    printf '%s\n' "$TASK"
+    echo ""
+    echo "(Plan pendiente: lo redacta y aprueba devbrain-interview.)"
+  } > "$F"
+  queue_commit_and_push "$QUEUE_DIR" "queue: add $REPO — $(basename "$F")"
+  echo "Encolado: $(basename "$F") (solicitado — se planifica en la próxima entrevista)"
+  ;;
+list)
+  printf '%-6s %-14s %-12s %s\n' "PRIO" "REPO" "STATUS" "ARCHIVO"
+  for f in "$QUEUE_DIR"/*.plan.md; do
+    [ -e "$f" ] || continue
+    printf '%-6s %-14s %-12s %s\n' "$(fm_get "$f" prioridad)" "$(fm_get "$f" repo)" "$(fm_get "$f" status)" "$(basename "$f")"
+  done
+  ;;
+pause|resume)
+  [ $# -ge 2 ] || usage
+  F="$QUEUE_DIR/$2"
+  [ -f "$F" ] || { echo "ERROR: not found: $2"; exit 4; }
+  if [ "$1" = "pause" ]; then
+    fm_set "$F" status_prev "$(fm_get "$F" status)"
+    fm_set "$F" status paused
+    queue_commit_and_push "$QUEUE_DIR" "queue: pause $2"
+    echo "Pausado: $2"
+  else
+    prev="$(fm_get "$F" status_prev)"
+    fm_set "$F" status "${prev:-solicitado}"
+    queue_commit_and_push "$QUEUE_DIR" "queue: resume $2 (-> ${prev:-solicitado})"
+    echo "Reanudado: $2 (→ ${prev:-solicitado})"
+  fi
+  ;;
+dale)
+  [ $# -ge 2 ] || usage
+  [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: 'dale' necesita un número de propuesta (1, 2, ...)"; exit 2; }
+  TITULO="$(resolve_pendiente "$2")"
+  [ -n "$TITULO" ] || { echo "ERROR: no hay una propuesta pendiente #$2"; exit 3; }
+  day_apply "$TITULO" dale
+  ;;
+no)
+  [ $# -ge 2 ] || usage
+  [[ "$2" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: 'no' necesita un número de propuesta (1, 2, ...)"; exit 2; }
+  N="$2"; shift 2; MOTIVO="$*"
+  TITULO="$(resolve_pendiente "$N")"
+  [ -n "$TITULO" ] || { echo "ERROR: no hay una propuesta pendiente #$N"; exit 3; }
+  day_apply "$TITULO" no "$MOTIVO"
+  ;;
+*) usage ;;
+esac

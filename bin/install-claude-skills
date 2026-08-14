@@ -1,0 +1,33 @@
+#!/bin/bash
+# install-claude-skills — link this repo's Claude Code skills into ~/.claude/skills/.
+#
+# Skills live in <this-repo>/claude/skills/<name>/SKILL.md so they are in git.
+# Writing them straight into ~/.claude/ would leave them untracked and lose them on
+# any machine rebuild — the same reasoning as every other file in this repo.
+#
+# Symlinks, not copies: one source of truth, and editing the repo edits the live
+# skill.
+#
+# Idempotent. Run it after adding a skill, and after restoring the machine.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$ROOT/claude/skills"
+DEST="$HOME/.claude/skills"
+
+[ -d "$SRC" ] || { echo "no skills directory at $SRC"; exit 2; }
+mkdir -p "$DEST"
+
+n=0
+for dir in "$SRC"/*/; do
+  [ -d "$dir" ] || continue
+  name="$(basename "$dir")"
+  [ -f "$dir/SKILL.md" ] || { echo "SKIP $name (no SKILL.md)"; continue; }
+  ln -sfn "${dir%/}" "$DEST/$name"
+  echo "linked $name -> ${dir%/}"
+  n=$((n + 1))
+done
+
+echo "$n skill(s) linked into $DEST"
+echo
+echo "Verify Claude Code actually loads them — presence is not loading:"
+echo "  printf 'List the names of the available skills.\\n' | claude -p --model sonnet"

@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""notion-api [--body-stdin] METHOD PATH  —  one Notion API call, JSON on stdout.
+
+Exit codes: 0 success · 1 API error (non-2xx) · 2 transport failure ·
+3 configuration error (no token) · 4 usage or bad stdin JSON.
+"""
+import json
+import os
+import sys
+
+# realpath, not abspath: abspath does not resolve symlinks, so invoking this
+# script through a symlink on PATH would compute the wrong ../lib and fail to
+# import. The test suite masks that by exporting PYTHONPATH, which production
+# does not set.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+
+from notion_api import (NotionConfigError, NotionError,  # noqa: E402
+                        NotionTransportError, call)
+
+
+USAGE = ("usage: notion-api [--body-stdin] METHOD PATH\n"
+         "  --body-stdin  read a JSON request body from stdin")
+
+
+def main():
+    args = sys.argv[1:]
+    # An explicit flag, NOT sys.stdin.isatty(). Inside a bash loop such as
+    # `while read -r id; do notion-api GET "pages/$id"; done < ids.txt`, stdin
+    # is the redirected file rather than a tty, so an isatty() check would read
+    # and consume the rest of that file, silently truncating the loop.
+    want_body = False
+    if args and args[0] == "--body-stdin":
+        want_body = True
+        args = args[1:]
+    if len(args) != 2:
+        print(USAGE, file=sys.stderr)
+        return 4
+    method, path = args
+    body = None
+    if want_body:
+        # A closed stdin makes sys.stdin None, and `.read()` on it raised an
+        # uncaught AttributeError that surfaced as exit 1 — indistinguishable
+        # from a real API error. Note for callers: --body-stdin blocks until EOF,
+        # so pass data or close the pipe. launchd supplies /dev/null, which is
+        # immediate EOF.
+        if sys.stdin is None or sys.stdin.closed:
+            print("notion-api: --body-stdin given but stdin is closed",
+                  file=sys.stderr)
+            return 4
+        raw = sys.stdin.read().strip()
+        if raw:
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                print(f"notion-api: stdin is not valid JSON: {exc}",
+                      file=sys.stderr)
+                return 4
+    try:
+        result = call(method, path, body,
+                      dry=os.environ.get("NOTION_DRY_RUN") == "1")
+    except NotionConfigError as exc:
+        print(f"notion-api: {exc}", file=sys.stderr)
+        return 3
+    except NotionTransportError as exc:
+        print(f"notion-api: {exc}", file=sys.stderr)
+        return 2
+    except NotionError as exc:
+        print(f"notion-api: {method} {path} returned {exc}", file=sys.stderr)
+        return 1
+    json.dump(result, sys.stdout, ensure_ascii=False)
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

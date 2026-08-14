@@ -1,0 +1,9 @@
+# Repos where devbrain must never write database migrations, even though it may
+# touch app code/docs there. A merged migration against a production database is a
+# different class of risk than merged app code — list any repo here where you want
+# that extra safeguard. Empty by default: no repo is blocked unless you opt it in.
+#
+# One repo name per line, same convention as devbrain-projects.allow.
+#
+# Example (remove the leading '#' to enable):
+# example-repo

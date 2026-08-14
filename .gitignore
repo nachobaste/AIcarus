@@ -1,0 +1,17 @@
+# Subagent-driven-development scratch: ledger, briefs, review packages.
+# Disposable by design — anything worth keeping belongs in a committed file.
+.superpowers/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Local, machine-specific config produced by setup.sh — contains your Telegram bot
+# token and chat id. NEVER commit this file.
+devbrain.local.env
+
+# Optional per-project tier overrides (see devbrain-classify.tiers.example)
+devbrain-classify.tiers
+
+# Optional Notion repo/epic mapping (see bin/notion-sync-sources.py)
+notion-repo-epics.json

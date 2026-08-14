@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""devbrain-repo-audit — catches repos that exist but nothing here ever looks at.
+
+Root cause this exists to fix: devbrain-digest's git-activity section only walks
+`~/dev/projects/*` on local disk. A repo that exists on GitHub but was never
+cloned there is invisible to it, to devbrain-drift, and to the wiki status-board
+convention — regardless of what devbrain-projects.allow says. That gap is real:
+a brand-new repo can sit on GitHub for hours with real commits and nobody here
+notices until someone happens to check by hand. See wiki/log.md for the incident
+that motivated this script.
+
+This does NOT grant or change any execution permission. devbrain-projects.allow
+(what devbrain may plan/execute on) is untouched. This only adds a third,
+read-only list: devbrain-projects.excluded (repos deliberately kept out, each
+with a reason) — anything in neither file gets flagged for the owner to classify,
+never auto-added to either.
+
+Scope: `gh repo list <owner>`, archived repos and forks dropped automatically
+(they are what almost all of a typical account's repos actually are — no
+ongoing decision needed for those). Repos owned by someone else (e.g.
+someuser/example-repo) are out of scope by construction — this audits one
+owner's account, not every remote devbrain has ever touched.
+
+Two independent finding types per repo (a repo can trip zero, one, or both):
+  repo-no-clonado       — on GitHub, not under PROJECTS_DIR. Invisible to the
+                          digest's git-activity walk and to devbrain-drift.
+  repo-sin-clasificar   — not in .allow and not in .excluded. Nobody has decided
+                          whether devbrain may touch it.
+A repo listed in .excluded never produces either finding: exclusion is treated
+as a decision already made, not something to keep nagging about, whether or not
+it happens to be cloned.
+
+Cost: exactly one `gh repo list` call, no matter how many repos exist. No `gh`
+calls per-repo (this is metadata GitHub already returns in one page).
+
+Usage:
+    devbrain-repo-audit [--quiet]
+
+Exit codes:
+    0  nothing to flag
+    1  findings printed (TSV on stdout)
+    2  a configured path does not exist, `gh repo list` failed, or
+       REPO_AUDIT_OWNER is not set
+"""
+import json
+import os
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+# No default: a real GitHub username baked in here would silently audit the
+# wrong account's repos on anyone else's machine. Must be set explicitly.
+OWNER = os.environ.get("REPO_AUDIT_OWNER")
+PROJECTS_DIR = os.environ.get("REPO_AUDIT_PROJECTS_DIR", f"{HOME}/dev/projects")
+ALLOWFILE = os.environ.get("REPO_AUDIT_ALLOWFILE",
+                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+EXCLUDEFILE = os.environ.get("REPO_AUDIT_EXCLUDEFILE",
+                              f"{HOME}/dev/machine-config/devbrain-projects.excluded")
+GH_BIN = os.environ.get("REPO_AUDIT_GH", "gh")
+
+FINDING_NOT_CLONED = "repo-no-clonado"
+FINDING_UNCLASSIFIED = "repo-sin-clasificar"
+
+
+def warn(msg):
+    print(f"devbrain-repo-audit: {msg}", file=sys.stderr)
+
+
+def read_names(path):
+    names = set()
+    if not os.path.isfile(path):
+        return names
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # .excluded lines are "name  # reason"; .allow lines are bare names.
+            name = line.split("#", 1)[0].strip()
+            if name:
+                names.add(name)
+    return names
+
+
+def run(cmd):
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return proc.returncode == 0, proc.stdout, proc.stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, "", str(exc)
+
+
+def list_repos(owner):
+    ok, out, err = run([GH_BIN, "repo", "list", owner,
+                         "--json", "name,isArchived,isFork,pushedAt",
+                         "--limit", "200"])
+    if not ok:
+        warn(f"gh repo list failed: {err.strip()[:200]}")
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        warn("gh repo list returned non-JSON")
+        return None
+
+
+def is_cloned(name):
+    project_dir = os.path.join(PROJECTS_DIR, name)
+    return os.path.isdir(os.path.join(project_dir, ".git"))
+
+
+def main(argv):
+    quiet = "--quiet" in argv[1:]
+
+    if not OWNER:
+        print("devbrain-repo-audit: REPO_AUDIT_OWNER no esta seteado. Setealo a tu "
+              "propio usuario de GitHub -- no hay valor por defecto.", file=sys.stderr)
+        return 2
+
+    if not os.path.isdir(PROJECTS_DIR):
+        print(f"devbrain-repo-audit: REPO_AUDIT_PROJECTS_DIR no existe: {PROJECTS_DIR}",
+              file=sys.stderr)
+        return 2
+
+    repos = list_repos(OWNER)
+    if repos is None:
+        return 2
+
+    allowed = read_names(ALLOWFILE)
+    excluded = read_names(EXCLUDEFILE)
+
+    findings = []
+    for r in repos:
+        if r.get("isArchived") or r.get("isFork"):
+            continue
+        name = r.get("name")
+        if not name or name in excluded:
+            continue
+        pushed = r.get("pushedAt", "?")
+        if not is_cloned(name):
+            findings.append((FINDING_NOT_CLONED, name, pushed))
+        if name not in allowed:
+            findings.append((FINDING_UNCLASSIFIED, name, pushed))
+
+    if not quiet:
+        for kind, name, pushed in findings:
+            print(f"{kind}\t{name}\t{pushed}")
+        print(f"repo-audit: {len(findings)}")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -1,0 +1,30 @@
+# Verification commands devbrain may run unattended, per project.
+# Adding a line here is a deliberate act, same convention as devbrain-projects.allow
+# and devbrain-base-branch.override.
+#
+# ONLY commands that VERIFY code already in the repo. Nothing that installs from
+# the network, nothing that deploys, nothing that writes outside the repo.
+# `npm install`, `pip install` and similar network-fetching commands stay
+# forbidden everywhere — that boundary is enforced by tests/test-devbrain-guardrails.sh.
+#
+# Format:  <project>=<pattern>,<pattern>,...
+#
+# A pattern is either an EXACT command:
+#     python3 scripts/build_docs.py               -> only that, with no arguments
+# or a PREFIX ending in `:*`, which allows arguments after it:
+#     npm run test:*                               -> `npm run test <anything>`
+#
+# Prefer the exact form; use `:*` only when the command genuinely takes arguments.
+# A bare `npm:*` or `python3:*` would grant the session arbitrary code execution and
+# defeats the point of declaring anything here.
+#
+# A pattern may end in `@<subdir>`, when the repo's package.json (or other tool
+# config) lives under a subdirectory rather than the repo root:
+#     npm run build@frontend                       -> `cd frontend && npm run build`
+# <subdir> is validated at load time — absolute paths and `..` are refused loudly
+# (to stderr), never silently dropped or let through.
+#
+# This file ships empty except for comments and one commented-out example.
+#
+# Example (remove the leading '#' to enable):
+# example-repo=npm run build,npm run lint,npm run test:run
