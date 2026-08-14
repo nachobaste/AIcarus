@@ -14,10 +14,13 @@
 # nothing is worse than no gate, because the dashboard looks clean either way.
 CLASSIFY_NAMES_FILE="${CLASSIFY_NAMES_FILE:-$HOME/.config/devbrain/secrets/redact-names.txt}"
 
-# Same pattern bin/devbrain-drift already uses for its own memory path: an explicit
-# variable with an absolute default, because the path is specific to this machine
-# (not derived, not guessed).
-CLASSIFY_MEMORY="${CLASSIFY_MEMORY:-$HOME/.claude/projects/-Users-urbot/memory}"
+# Same pattern bin/devbrain-drift already uses for its own memory path: an
+# explicit variable with a default, overridable per machine. The default is
+# *computed*, not a hardcoded path from the machine this kit was built on —
+# Claude Code's own project-directory naming encodes your home directory with
+# slashes turned into hyphens (e.g. /Users/alice -> -Users-alice), so deriving
+# it from $HOME here means the default is correct on any machine, not just one.
+CLASSIFY_MEMORY="${CLASSIFY_MEMORY:-$HOME/.claude/projects/$(echo "$HOME" | tr '/' '-')/memory}"
 
 # Optional, config-driven tier map: one "path-prefix=tier" line per line, comments
 # with '#'. Absent by default — every ~/dev/projects/<repo> not explicitly listed
