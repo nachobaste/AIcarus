@@ -30,7 +30,7 @@ EOF
 cat > "$TMP/fake-claude" <<'EOF'
 #!/bin/bash
 IN="$(cat)"
-echo "RESUMEN-IA: $(printf '%s' "$IN" | wc -l | tr -d ' ') lineas de contexto recibidas"
+echo "AI-SUMMARY: $(printf '%s' "$IN" | wc -l | tr -d ' ') lines of context received"
 EOF
 SENT="$TMP/sent-message.txt"
 cat > "$TMP/fake-openclaw" <<EOF
@@ -104,46 +104,46 @@ grep -q "digest sent" "$TMP/digest.log" 2>/dev/null || fail "the digest did not 
 echo "OK: every external tool is stubbed, none of the real ones were reached"
 
 # ---- 1. no backlog file at all: digest still runs, no proposals section -----
-grep -q "Propuestas" "$SENT" && fail "a proposals header appeared with no backlog file"
+grep -q "Proposals" "$SENT" && fail "a proposals header appeared with no backlog file"
 echo "OK: no backlog file means no proposals section, no crash"
 
 # ---- 2. a pending proposal reaches the message, numbered, unmodified --------
 cat > "$BACKLOG" <<'EOF'
-# Mejoras propuestas
+# Proposed improvements
 
 ## 2026-08-08 — demo
-### El deploy pierde el segundo intento
+### The deploy loses its second attempt
 - repo: demo
-- evidencia: src/uno.js:1
-- porque: reintenta sin esperar el rate limit
-- tamano: 1 noche
+- evidence: src/one.js:1
+- why: it retries without waiting out the rate limit
+- size: 1 night
 
-## Propuestas — 2026-08-08
-### Arreglar el reintento del deploy
-- origen: El deploy pierde el segundo intento
+## Proposals — 2026-08-08
+### Fix the deploy retry
+- source: The deploy loses its second attempt
 - repo: demo
-- esfuerzo: 1 noche
-- riesgos: ninguno serio
-- verificar: correr el deploy dos veces seguidas
+- effort: 1 night
+- risks: nothing serious
+- verify: run the deploy twice in a row
 
-#### Opcion A
-- archivos: src/uno.js
+#### Option A
+- files: src/one.js
 
-#### Opcion B
-- archivos: src/dos.js
+#### Option B
+- files: src/two.js
 EOF
 rm -f "$SENT"
 run_digest >/dev/null 2>&1
 [ -f "$SENT" ] || fail "no message was sent with a pending proposal"
-grep -q "^1\. Arreglar el reintento del deploy$" "$SENT" \
+grep -q "^1\. Fix the deploy retry$" "$SENT" \
   || fail "the numbered title did not survive intact: $(cat "$SENT")"
-grep -q "RESUMEN-IA:.*1\. Arreglar" "$SENT" \
+grep -q "AI-SUMMARY:.*1\. Fix" "$SENT" \
   && fail "the numbering was fed through the AI summarizer and came back reworded"
 echo "OK: a pending proposal reaches the owner numbered and untouched by the summarizer"
 
 # ---- 3. the proposals block sits AFTER the AI summary, not instead of it ----
-grep -q "RESUMEN-IA:" "$SENT" || fail "the AI-generated summary is missing from the message"
-AI_LINE=$(grep -n "RESUMEN-IA:" "$SENT" | head -1 | cut -d: -f1)
+grep -q "AI-SUMMARY:" "$SENT" || fail "the AI-generated summary is missing from the message"
+AI_LINE=$(grep -n "AI-SUMMARY:" "$SENT" | head -1 | cut -d: -f1)
 PROP_LINE=$(grep -n "^1\. " "$SENT" | head -1 | cut -d: -f1)
 [ "$AI_LINE" -lt "$PROP_LINE" ] || fail "the proposals block does not come after the AI summary"
 echo "OK: the proposals block is appended after the AI summary"
@@ -151,23 +151,23 @@ echo "OK: the proposals block is appended after the AI summary"
 # ---- 4. a decided proposal (plan 240/250's future contract) is not repeated -
 cat >> "$BACKLOG" <<'EOF'
 
-## Propuestas — 2026-08-07
-### Ya decidida ayer
-- origen: El deploy pierde el segundo intento
+## Proposals — 2026-08-07
+### Already decided yesterday
+- source: The deploy loses its second attempt
 - repo: demo
-- esfuerzo: 1 noche
-- riesgos: x
-- decision: aprobada
+- effort: 1 night
+- risks: x
+- decision: approved
 
 #### A
-- archivos: src/uno.js
+- files: src/one.js
 
 #### B
-- archivos: src/dos.js
+- files: src/two.js
 EOF
 rm -f "$SENT"
 run_digest >/dev/null 2>&1
-grep -q "Ya decidida ayer" "$SENT" && fail "an already-decided proposal was shown again"
+grep -q "Already decided yesterday" "$SENT" && fail "an already-decided proposal was shown again"
 echo "OK: an already-decided proposal never reappears in the digest"
 
 # ---- 5. gateway down -> the digest STILL arrives, via curl, tagged (plan 260) ----
@@ -196,7 +196,7 @@ echo "OK: a healthy gateway never falls back and never double-sends"
 
 # ---- 7. blocked tasks surface as a pending decision (plan 290, D5) ----------
 mkdir -p "$TMP/queue"
-cat > "$TMP/queue/50-repoa--algo.plan.md" <<'EOF'
+cat > "$TMP/queue/50-repoa--something.plan.md" <<'EOF'
 ---
 repo: repoa
 status: blocked
@@ -204,47 +204,47 @@ prioridad: 50
 creado: 2026-08-08
 bloqueado_por: deno lint
 ---
-cuerpo del plan
+plan body
 EOF
 rm -f "$SENT"
 run_digest > /dev/null 2>&1
 [ -f "$SENT" ] || fail "no message was sent with a blocked task pending"
-grep -q "50-repoa--algo.plan.md" "$SENT" || fail "the blocked plan's filename is missing from the digest"
+grep -q "50-repoa--something.plan.md" "$SENT" || fail "the blocked plan's filename is missing from the digest"
 grep -q "deno lint" "$SENT" || fail "the exact missing command is missing from the digest"
 echo "OK: a blocked task surfaces in the digest with its exact missing command"
 
 # a plan that is merely approved/done/failed must NOT appear in the blocked section
-cat > "$TMP/queue/51-repoa--otro.plan.md" <<'EOF'
+cat > "$TMP/queue/51-repoa--other.plan.md" <<'EOF'
 ---
 repo: repoa
 status: done
 prioridad: 51
 creado: 2026-08-08
 ---
-cuerpo
+body
 EOF
 rm -f "$SENT"
 run_digest > /dev/null 2>&1
-grep -q "51-repoa--otro" "$SENT" && fail "a non-blocked plan appeared in the blocked-tasks digest section"
+grep -q "51-repoa--other" "$SENT" && fail "a non-blocked plan appeared in the blocked-tasks digest section"
 echo "OK: only genuinely blocked plans appear in that section"
 rm -f "$TMP/queue"/*.plan.md
 
 # ---- 8. blocked tasks carry age (mtime proxy, honestly labeled) and escalate
 # once stale (2026-08-12). There is no "since blocked" field in the frontmatter
 # (bin/devbrain-night only writes status + bloqueado_por) — the file's own last-
-# modified time is the proxy, which is why the digest says "según última
-# modificación" instead of claiming a confirmed block date.
-FRESH_BLOCKED="$TMP/queue/60-repoa--fresco.plan.md"
-STALE_BLOCKED="$TMP/queue/61-repoa--viejo.plan.md"
+# modified time is the proxy, which is why the digest says "per last modification"
+# instead of claiming a confirmed block date.
+FRESH_BLOCKED="$TMP/queue/60-repoa--fresh.plan.md"
+STALE_BLOCKED="$TMP/queue/61-repoa--old.plan.md"
 cat > "$FRESH_BLOCKED" <<'EOF'
 ---
 repo: repoa
 status: blocked
 prioridad: 60
 creado: 2026-08-11
-bloqueado_por: falta permiso A
+bloqueado_por: missing permission A
 ---
-cuerpo
+body
 EOF
 cat > "$STALE_BLOCKED" <<'EOF'
 ---
@@ -252,39 +252,39 @@ repo: repoa
 status: blocked
 prioridad: 61
 creado: 2026-07-29
-bloqueado_por: falta permiso B
+bloqueado_por: missing permission B
 ---
-cuerpo
+body
 EOF
 touch -t "$(date -v-10d +%Y%m%d0000 2>/dev/null || date -d '-10 days' +%Y%m%d0000)" "$STALE_BLOCKED"
 rm -f "$SENT"
 run_digest > /dev/null 2>&1
 [ -f "$SENT" ] || fail "no message was sent with blocked tasks pending"
-grep -q -- "- 60-repoa--fresco.plan.md.*falta permiso A" "$SENT" \
+grep -q -- "- 60-repoa--fresh.plan.md.*missing permission A" "$SENT" \
   || fail "a freshly-blocked task should show a plain bullet, no escalation: $(cat "$SENT")"
 grep -q -- "per last modification" "$SENT" \
   || fail "the age must be labeled as a proxy (last modified), never presented as a confirmed block date"
-grep -q -- "⚠️ 61-repoa--viejo.plan.md.*falta permiso B" "$SENT" \
+grep -q -- "⚠️ 61-repoa--old.plan.md.*missing permission B" "$SENT" \
   || fail "a task blocked ~10 days ago (past the default 3-day threshold) must show the ⚠️ marker: $(cat "$SENT")"
 echo "OK: blocked tasks show their age (labeled as a proxy) and escalate visually once stale"
 
-# ---- 9. DEVBRAIN_DIGEST_STALE_DAYS is overridable, same knob as Propuestas ----
+# ---- 9. DEVBRAIN_DIGEST_STALE_DAYS is overridable, same knob as Proposals ----
 rm -f "$SENT"
 DEVBRAIN_DIGEST_STALE_DAYS=100 run_digest > /dev/null 2>&1
 grep -q "⚠️" "$SENT" && fail "raising the threshold to 100 must suppress escalation for a ~10-day-old block"
-grep -q -- "61-repoa--viejo.plan.md" "$SENT" || fail "raising the threshold must not hide the blocked task itself"
+grep -q -- "61-repoa--old.plan.md" "$SENT" || fail "raising the threshold must not hide the blocked task itself"
 echo "OK: DEVBRAIN_DIGEST_STALE_DAYS=100 suppresses escalation for the same ~10-day-old blocked task"
 
 # ---- 10. the escalation marker is appended verbatim, never through the summarizer,
 # same mechanism (and same reason) as the numbering in cases 2-3 above
-grep -q "RESUMEN-IA:" "$SENT" || fail "the AI-generated summary is missing"
+grep -q "AI-SUMMARY:" "$SENT" || fail "the AI-generated summary is missing"
 rm -f "$SENT"
 run_digest > /dev/null 2>&1   # back to the default threshold, so ⚠️ is present again
-AI_LINE=$(grep -n "RESUMEN-IA:" "$SENT" | head -1 | cut -d: -f1)
+AI_LINE=$(grep -n "AI-SUMMARY:" "$SENT" | head -1 | cut -d: -f1)
 WARN_LINE=$(grep -n "⚠️" "$SENT" | head -1 | cut -d: -f1)
 [ -n "$WARN_LINE" ] || fail "expected the ⚠️ marker to be present at the default threshold"
 [ "$AI_LINE" -lt "$WARN_LINE" ] || fail "the escalation marker does not come after the AI summary"
-grep -q "RESUMEN-IA:.*⚠️" "$SENT" && fail "the escalation marker was fed through the AI summarizer"
+grep -q "AI-SUMMARY:.*⚠️" "$SENT" && fail "the escalation marker was fed through the AI summarizer"
 echo "OK: the escalation marker is appended after the AI summary, untouched by the summarizer"
 rm -f "$TMP/queue"/*.plan.md
 

@@ -17,9 +17,9 @@ research_promote.
 
 Usage (backlog text always via stdin):
     day_engine.py list
-    day_engine.py show <titulo>
-    day_engine.py render <titulo> [--opcion A|B]
-    day_engine.py mark <titulo> dale|no [--motivo TEXT]
+    day_engine.py show <title>
+    day_engine.py render <title> [--option A|B]
+    day_engine.py mark <title> dale|no [--reason TEXT]
 
 Environment:
     RESEARCH_ALLOWFILE  devbrain-projects.allow path (render only)
@@ -39,65 +39,65 @@ def slugify(text):
     stripped = unicodedata.normalize("NFKD", text.lower())
     ascii_only = "".join(c for c in stripped if not unicodedata.combining(c))
     slug = re.sub(r"[^a-z0-9]+", "-", ascii_only).strip("-")
-    return slug[:SLUG_MAX].rstrip("-") or "propuesta"
+    return slug[:SLUG_MAX].rstrip("-") or "proposal"
 
 
 def parse_backlog(text):
-    """Every '### ' block that carries an '- origen:' line — the same marker
+    """Every '### ' block that carries a '- source:' line — the same marker
     research_promote uses to tell a proposal apart from a raw finding, which shares
     the same '### title' heading. Each block keeps its raw lines (for `show` and for
     splicing in `mark`) and its options in order, each with its own raw lines (for
-    `render`, which needs an option's pros/contras verbatim, not just its files)."""
+    `render`, which needs an option's pros/cons verbatim, not just its files)."""
     blocks, cur = [], None
     for raw in text.splitlines():
         line = raw.rstrip()
         if line.startswith("### "):
             if cur:
                 blocks.append(cur)
-            cur = {"titulo": line[4:].strip(), "meta": {}, "opciones": [], "raw": [raw]}
+            cur = {"title": line[4:].strip(), "meta": {}, "options": [], "raw": [raw]}
             continue
         if cur is None:
             continue
         cur["raw"].append(raw)
         if line.startswith("#### "):
-            cur["opciones"].append({"nombre": line[5:].strip(), "archivos": set(), "raw": [raw]})
+            cur["options"].append({"name": line[5:].strip(), "files": set(), "raw": [raw]})
             continue
-        if cur["opciones"]:
-            opt = cur["opciones"][-1]
+        if cur["options"]:
+            opt = cur["options"][-1]
             opt["raw"].append(raw)
             m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", line)
-            if m and fold(m.group(1)) == "archivos":
-                opt["archivos"] = {p.strip().strip("`") for p in m.group(2).split(",") if p.strip()}
+            if m and fold(m.group(1)) == "files":
+                opt["files"] = {p.strip().strip("`") for p in m.group(2).split(",") if p.strip()}
             continue
         m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", line)
         if m:
             cur["meta"][fold(m.group(1))] = m.group(2).strip()
     if cur:
         blocks.append(cur)
-    return [b for b in blocks if "origen" in b["meta"]]
+    return [b for b in blocks if "source" in b["meta"]]
 
 
 def pending(blocks):
     return [b for b in blocks if "decision" not in b["meta"]]
 
 
-def find_pending(blocks, titulo):
+def find_pending(blocks, title):
     for b in pending(blocks):
-        if b["titulo"] == titulo:
+        if b["title"] == title:
             return b
     return None
 
 
 def cmd_list():
     for b in pending(parse_backlog(sys.stdin.read())):
-        print(b["titulo"])
+        print(b["title"])
     return 0
 
 
-def cmd_show(titulo):
-    b = find_pending(parse_backlog(sys.stdin.read()), titulo)
+def cmd_show(title):
+    b = find_pending(parse_backlog(sys.stdin.read()), title)
     if not b:
-        print(f"day_engine: no hay una propuesta pendiente con ese titulo: {titulo!r}", file=sys.stderr)
+        print(f"day_engine: no pending proposal with that title: {title!r}", file=sys.stderr)
         return 3
     print("\n".join(b["raw"]).rstrip())
     return 0
@@ -128,107 +128,107 @@ def allowed_repo(repo, allowfile):
     return repo in listed
 
 
-def cmd_render(titulo, opcion_letra):
-    b = find_pending(parse_backlog(sys.stdin.read()), titulo)
+def cmd_render(title, option_letter):
+    b = find_pending(parse_backlog(sys.stdin.read()), title)
     if not b:
-        print(f"day_engine: no hay una propuesta pendiente con ese titulo: {titulo!r}", file=sys.stderr)
+        print(f"day_engine: no pending proposal with that title: {title!r}", file=sys.stderr)
         return 4
     repo = b["meta"].get("repo", "")
     allowfile = os.environ.get("RESEARCH_ALLOWFILE", "")
     if not allowed_repo(repo, allowfile):
-        print(f"day_engine: repo no habilitado para aprobar: {repo!r} "
-              f"(ver {allowfile or 'RESEARCH_ALLOWFILE sin definir'})", file=sys.stderr)
+        print(f"day_engine: repo not enabled for approval: {repo!r} "
+              f"(see {allowfile or 'RESEARCH_ALLOWFILE not set'})", file=sys.stderr)
         return 3
-    if not b["opciones"]:
-        print(f"day_engine: la propuesta {titulo!r} no tiene opciones para elegir", file=sys.stderr)
+    if not b["options"]:
+        print(f"day_engine: proposal {title!r} has no options to choose from", file=sys.stderr)
         return 4
 
-    if opcion_letra:
-        idx = ord(opcion_letra.upper()) - ord("A")
-        if idx < 0 or idx >= len(b["opciones"]):
-            print(f"day_engine: opcion invalida: {opcion_letra!r}", file=sys.stderr)
+    if option_letter:
+        idx = ord(option_letter.upper()) - ord("A")
+        if idx < 0 or idx >= len(b["options"]):
+            print(f"day_engine: invalid option: {option_letter!r}", file=sys.stderr)
             return 2
     else:
         idx = 0  # default: the first/recommended option
-    opcion = b["opciones"][idx]
-    letra = chr(ord("A") + idx)
+    option = b["options"][idx]
+    letter = chr(ord("A") + idx)
 
-    archivos = ", ".join(sorted(opcion["archivos"])) or "(sin archivos declarados)"
-    riesgos = b["meta"].get("riesgos", "(ninguno declarado por la propuesta)")
-    verificar = b["meta"].get("verificar", "(no especificado por la propuesta)")
-    origen = b["meta"].get("origen", "(sin hallazgo de origen)")
-    opcion_detalle = "\n".join(opcion["raw"]).strip()
+    files = ", ".join(sorted(option["files"])) or "(no files declared)"
+    risks = b["meta"].get("risks", "(none declared by the proposal)")
+    verify = b["meta"].get("verify", "(not specified by the proposal)")
+    source = b["meta"].get("source", "(no source finding)")
+    option_detail = "\n".join(option["raw"]).strip()
 
-    body = f"""{b['titulo']}
+    body = f"""{b['title']}
 
-## Contexto
+## Context
 
-Propuesta del research shift (`devbrain-research` → `devbrain-day`), generada a partir
-del hallazgo "{origen}". Opción elegida: {letra} — {opcion['nombre']}.
+Proposal from the research shift (`devbrain-research` -> `devbrain-day`), generated from
+the finding "{source}". Chosen option: {letter} — {option['name']}.
 
-## Qué hacer
+## What to do
 
-Archivos afectados: {archivos}
+Affected files: {files}
 
-{opcion_detalle}
+{option_detail}
 
-## Cómo verificar
+## How to verify
 
-{verificar}
+{verify}
 
-## Riesgos
+## Risks
 
-{riesgos}
+{risks}
 
-## Recordatorio
+## Reminder
 
-Generado por `devbrain-day` a partir de una propuesta ya aprobada ("dale").
-No es un plan escrito a mano — si algo no cierra contra el código real, priorizar lo
-que se observa en el repo por sobre lo que la propuesta asumió.
+Generated by `devbrain-day` from an already-approved proposal ("dale").
+Not a hand-written plan — if anything does not line up against the real code,
+prioritize what you observe in the repo over what the proposal assumed.
 """
     print(f"repo: {repo}")
-    print(f"slug: {slugify(b['titulo'])}")
+    print(f"slug: {slugify(b['title'])}")
     print("---")
     print(body)
     return 0
 
 
-def cmd_mark(titulo, decision, motivo):
+def cmd_mark(title, decision, reason):
     text = sys.stdin.read()
     blocks = parse_backlog(text)
-    b = find_pending(blocks, titulo)
+    b = find_pending(blocks, title)
     if not b:
-        print(f"day_engine: no hay una propuesta pendiente con ese titulo: {titulo!r} "
-              "(ya decidida, o no existe)", file=sys.stderr)
+        print(f"day_engine: no pending proposal with that title: {title!r} "
+              "(already decided, or does not exist)", file=sys.stderr)
         return 3
 
     if decision == "dale":
-        dec_line = "- decision: aprobada"
+        dec_line = "- decision: approved"
     elif decision == "no":
-        if not motivo or not motivo.strip():
-            print("day_engine: descartar una propuesta requiere --motivo (sin motivo, "
-                  "el research repite el mismo error toda la semana)", file=sys.stderr)
+        if not reason or not reason.strip():
+            print("day_engine: discarding a proposal requires --reason (without one, "
+                  "research repeats the same mistake all week)", file=sys.stderr)
             return 2
-        dec_line = f"- decision: descartada — {motivo.strip()}"
+        dec_line = f"- decision: discarded — {reason.strip()}"
     else:
-        print(f"day_engine: decision desconocida: {decision!r} (dale|no)", file=sys.stderr)
+        print(f"day_engine: unknown decision: {decision!r} (dale|no)", file=sys.stderr)
         return 2
 
     lines = text.splitlines()
     # Locate the block's raw lines within the full text by matching its exact sequence
     # once — a proposal's raw block is unique by construction (parse_backlog built it
     # from a single contiguous run of lines), so this anchors reliably even if two
-    # proposals happen to share a title (the origen line still disambiguates them,
+    # proposals happen to share a title (the source line still disambiguates them,
     # since sys.stdin.read() -> parse -> pending -> find_pending already picked one
     # specific block object, not just a name).
     block_text = "\n".join(b["raw"])
     joined = "\n".join(lines)
     start = joined.find(block_text)
     if start < 0:
-        print("day_engine: no se pudo ubicar el bloque exacto de la propuesta en el "
-              "backlog (¿se edito a mano entre el parseo y ahora?)", file=sys.stderr)
+        print("day_engine: could not locate the proposal's exact block in the "
+              "backlog (was it hand-edited between parsing and now?)", file=sys.stderr)
         return 5
-    insertion = start + len(b["raw"][0])  # right after the '### titulo' line
+    insertion = start + len(b["raw"][0])  # right after the '### title' line
     new_text = joined[:insertion] + "\n" + dec_line + joined[insertion:]
     print(new_text)
     return 0
@@ -245,31 +245,31 @@ def main(argv):
         return cmd_list()
     if cmd == "show":
         if not rest:
-            print("usage: day_engine.py show <titulo>", file=sys.stderr)
+            print("usage: day_engine.py show <title>", file=sys.stderr)
             return 2
         return cmd_show(rest[0])
     if cmd == "render":
         if not rest:
-            print("usage: day_engine.py render <titulo> [--opcion A|B]", file=sys.stderr)
+            print("usage: day_engine.py render <title> [--option A|B]", file=sys.stderr)
             return 2
-        opcion = None
-        if "--opcion" in rest:
-            i = rest.index("--opcion")
-            opcion = rest[i + 1] if i + 1 < len(rest) else None
+        option = None
+        if "--option" in rest:
+            i = rest.index("--option")
+            option = rest[i + 1] if i + 1 < len(rest) else None
             del rest[i:i + 2]
-        return cmd_render(rest[0], opcion)
+        return cmd_render(rest[0], option)
     if cmd == "mark":
         if len(rest) < 2:
-            print("usage: day_engine.py mark <titulo> dale|no [--motivo TEXT]", file=sys.stderr)
+            print("usage: day_engine.py mark <title> dale|no [--reason TEXT]", file=sys.stderr)
             return 2
-        motivo = None
-        if "--motivo" in rest:
-            i = rest.index("--motivo")
-            motivo = rest[i + 1] if i + 1 < len(rest) else None
+        reason = None
+        if "--reason" in rest:
+            i = rest.index("--reason")
+            reason = rest[i + 1] if i + 1 < len(rest) else None
             del rest[i:i + 2]
-        return cmd_mark(rest[0], rest[1], motivo)
+        return cmd_mark(rest[0], rest[1], reason)
 
-    print(f"day_engine.py: comando desconocido: {cmd!r}", file=sys.stderr)
+    print(f"day_engine.py: unknown command: {cmd!r}", file=sys.stderr)
     return 2
 
 

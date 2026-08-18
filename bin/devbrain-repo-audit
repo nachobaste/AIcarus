@@ -22,9 +22,9 @@ someuser/example-repo) are out of scope by construction — this audits one
 owner's account, not every remote devbrain has ever touched.
 
 Two independent finding types per repo (a repo can trip zero, one, or both):
-  repo-no-clonado       — on GitHub, not under PROJECTS_DIR. Invisible to the
+  repo-not-cloned       — on GitHub, not under PROJECTS_DIR. Invisible to the
                           digest's git-activity walk and to devbrain-drift.
-  repo-sin-clasificar   — not in .allow and not in .excluded. Nobody has decided
+  repo-unclassified     — not in .allow and not in .excluded. Nobody has decided
                           whether devbrain may touch it.
 A repo listed in .excluded never produces either finding: exclusion is treated
 as a decision already made, not something to keep nagging about, whether or not
@@ -53,13 +53,13 @@ HOME = os.path.expanduser("~")
 OWNER = os.environ.get("REPO_AUDIT_OWNER")
 PROJECTS_DIR = os.environ.get("REPO_AUDIT_PROJECTS_DIR", f"{HOME}/dev/projects")
 ALLOWFILE = os.environ.get("REPO_AUDIT_ALLOWFILE",
-                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+                            f"{HOME}/dev/devbrain/devbrain-projects.allow")
 EXCLUDEFILE = os.environ.get("REPO_AUDIT_EXCLUDEFILE",
-                              f"{HOME}/dev/machine-config/devbrain-projects.excluded")
+                              f"{HOME}/dev/devbrain/devbrain-projects.excluded")
 GH_BIN = os.environ.get("REPO_AUDIT_GH", "gh")
 
-FINDING_NOT_CLONED = "repo-no-clonado"
-FINDING_UNCLASSIFIED = "repo-sin-clasificar"
+FINDING_NOT_CLONED = "repo-not-cloned"
+FINDING_UNCLASSIFIED = "repo-unclassified"
 
 
 def warn(msg):
@@ -113,12 +113,12 @@ def main(argv):
     quiet = "--quiet" in argv[1:]
 
     if not OWNER:
-        print("devbrain-repo-audit: REPO_AUDIT_OWNER no esta seteado. Setealo a tu "
-              "propio usuario de GitHub -- no hay valor por defecto.", file=sys.stderr)
+        print("devbrain-repo-audit: REPO_AUDIT_OWNER is not set. Set it to your "
+              "own GitHub username -- there is no default.", file=sys.stderr)
         return 2
 
     if not os.path.isdir(PROJECTS_DIR):
-        print(f"devbrain-repo-audit: REPO_AUDIT_PROJECTS_DIR no existe: {PROJECTS_DIR}",
+        print(f"devbrain-repo-audit: REPO_AUDIT_PROJECTS_DIR does not exist: {PROJECTS_DIR}",
               file=sys.stderr)
         return 2
 

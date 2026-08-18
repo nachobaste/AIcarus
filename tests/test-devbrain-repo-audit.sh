@@ -35,8 +35,8 @@ export REPO_AUDIT_OWNER="testowner"
 #   archived-repo    — archived, must be skipped entirely (no findings)
 #   forked-repo      — fork, must be skipped entirely
 #   healthy-repo     — cloned + allowed, no findings
-#   uncloned-allowed — allowed but not cloned -> repo-no-clonado only
-#   unclassified-cloned — cloned, neither .allow nor .excluded -> repo-sin-clasificar only
+#   uncloned-allowed — allowed but not cloned -> repo-not-cloned only
+#   unclassified-cloned — cloned, neither .allow nor .excluded -> repo-unclassified only
 #   blind-spot       — neither cloned nor classified -> BOTH findings
 #   excluded-repo    — in .excluded, not cloned, not in .allow -> no findings at all
 cat > "$TMP/repos.json" <<'JSON'
@@ -86,16 +86,16 @@ printf '%s\n' "$OUT" | grep -q "healthy-repo" && fail "healthy-repo (cloned + al
 $OUT"
 
 # ---- detection assertions ----
-assert_line "repo-no-clonado	uncloned-allowed	2026-08-11T00:00:00Z"
-assert_line "repo-sin-clasificar	unclassified-cloned	2026-08-12T00:00:00Z"
-assert_line "repo-no-clonado	blind-spot	2026-08-12T04:03:00Z"
-assert_line "repo-sin-clasificar	blind-spot	2026-08-12T04:03:00Z"
+assert_line "repo-not-cloned	uncloned-allowed	2026-08-11T00:00:00Z"
+assert_line "repo-unclassified	unclassified-cloned	2026-08-12T00:00:00Z"
+assert_line "repo-not-cloned	blind-spot	2026-08-12T04:03:00Z"
+assert_line "repo-unclassified	blind-spot	2026-08-12T04:03:00Z"
 
-# uncloned-allowed is allowed, so it must NOT also get repo-sin-clasificar
-printf '%s\n' "$OUT" | grep -q "repo-sin-clasificar	uncloned-allowed" \
+# uncloned-allowed is allowed, so it must NOT also get repo-unclassified
+printf '%s\n' "$OUT" | grep -q "repo-unclassified	uncloned-allowed" \
   && fail "uncloned-allowed is in .allow, must not be flagged unclassified"
-# unclassified-cloned IS cloned, so it must NOT also get repo-no-clonado
-printf '%s\n' "$OUT" | grep -q "repo-no-clonado	unclassified-cloned" \
+# unclassified-cloned IS cloned, so it must NOT also get repo-not-cloned
+printf '%s\n' "$OUT" | grep -q "repo-not-cloned	unclassified-cloned" \
   && fail "unclassified-cloned has a local clone, must not be flagged not-cloned"
 
 echo "$OUT" | grep -q "^repo-audit: 4$" || fail "expected count line 'repo-audit: 4', got:

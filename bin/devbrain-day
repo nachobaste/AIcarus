@@ -18,68 +18,70 @@ export DAY_ENGINE
 export RESEARCH_ALLOWFILE="${RESEARCH_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
 
 if [ ! -f "$BACKLOG" ]; then
-  echo "No hay backlog todavía ($BACKLOG). Nada que decidir."
+  echo "No backlog yet ($BACKLOG). Nothing to decide."
   exit 0
 fi
 
-# Snapshot de títulos pendientes AL EMPEZAR esta corrida. Se procesan por título, no por
-# posición: si una decisión anterior modifica el backlog, la posición de las que faltan
-# podría desalinearse, pero el título de una propuesta ya mostrada nunca cambia.
+# Snapshot of pending titles AT THE START of this run. Processed by title, not
+# position: if an earlier decision modifies the backlog, the position of the
+# remaining ones could shift, but the title of a proposal already shown never
+# changes.
 # No `mapfile`: bash 3.2 (macOS default) doesn't have it — see bin/devbrain-research's
 # pick_repos() for the same lesson, learned there first.
-TITULOS=()
+TITLES=()
 while IFS= read -r LINE; do
-  [ -n "$LINE" ] && TITULOS+=("$LINE")
+  [ -n "$LINE" ] && TITLES+=("$LINE")
 done < <(python3 "$DAY_ENGINE" list < "$BACKLOG")
 
-if [ "${#TITULOS[@]}" -eq 0 ]; then
-  echo "No hay propuestas pendientes. Nada que decidir hoy."
+if [ "${#TITLES[@]}" -eq 0 ]; then
+  echo "No pending proposals. Nothing to decide today."
   exit 0
 fi
 
-echo "${#TITULOS[@]} propuesta(s) pendiente(s)."
+echo "${#TITLES[@]} pending proposal(s)."
 echo
 
-DECIDIDAS=0
-for TITULO in "${TITULOS[@]}"; do
-  # Puede haber quedado decidida por una corrida anterior de esta misma sesión (no debería,
-  # cada título aparece una vez) o por otra fuente — 'show' se niega si ya no está pendiente.
-  DETALLE="$(python3 "$DAY_ENGINE" show "$TITULO" < "$BACKLOG" 2>/dev/null)" || continue
+DECIDED=0
+for TITLE in "${TITLES[@]}"; do
+  # May have already been decided by an earlier run of this same session (shouldn't
+  # happen, each title appears once) or by another source — 'show' refuses if it's
+  # no longer pending.
+  DETAIL="$(python3 "$DAY_ENGINE" show "$TITLE" < "$BACKLOG" 2>/dev/null)" || continue
 
   echo "────────────────────────────────────────"
-  printf '%s\n' "$DETALLE"
+  printf '%s\n' "$DETAIL"
   echo
-  printf 'Decisión (dale [A|B] / no / después) > '
+  printf 'Decision (dale [A|B] / no / later) > '
   read -r RESP || RESP=""
 
-  # Ante la duda, no aprobar: cualquier cosa que no sea exactamente "dale[ A|B]" o "no"
-  # se trata como "después". La respuesta ambigua nunca escribe nada.
+  # When in doubt, don't approve: anything that isn't exactly "dale[ A|B]" or "no"
+  # is treated as "later". An ambiguous reply never writes anything.
   case "$(printf '%s' "$RESP" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null)" in
     dale | "dale a")
-      OUT="$(day_apply "$TITULO" dale "" A 2>&1)"; RC=$?
+      OUT="$(day_apply "$TITLE" dale "" A 2>&1)"; RC=$?
       ;;
     "dale b")
-      OUT="$(day_apply "$TITULO" dale "" B 2>&1)"; RC=$?
+      OUT="$(day_apply "$TITLE" dale "" B 2>&1)"; RC=$?
       ;;
     no)
-      printf 'Motivo del descarte (obligatorio) > '
-      read -r MOTIVO || MOTIVO=""
-      while [ -z "$(printf '%s' "$MOTIVO" | xargs 2>/dev/null)" ]; do
-        printf 'El motivo no puede quedar vacío — el research repite el mismo error sin él.\nMotivo > '
-        read -r MOTIVO || MOTIVO=""
+      printf 'Reason for discarding (required) > '
+      read -r REASON || REASON=""
+      while [ -z "$(printf '%s' "$REASON" | xargs 2>/dev/null)" ]; do
+        printf 'The reason cannot be empty — research repeats the same mistake without it.\nReason > '
+        read -r REASON || REASON=""
       done
-      OUT="$(day_apply "$TITULO" no "$MOTIVO" 2>&1)"; RC=$?
+      OUT="$(day_apply "$TITLE" no "$REASON" 2>&1)"; RC=$?
       ;;
     *)
-      echo "→ Queda pendiente para el próximo ciclo."
+      echo "→ Stays pending for the next cycle."
       continue
       ;;
   esac
 
   echo "$OUT"
-  [ $RC -eq 0 ] && DECIDIDAS=$((DECIDIDAS + 1))
+  [ $RC -eq 0 ] && DECIDED=$((DECIDED + 1))
   echo
 done
 
 echo "────────────────────────────────────────"
-echo "Listo: $DECIDIDAS de ${#TITULOS[@]} decididas en esta corrida."
+echo "Done: $DECIDED of ${#TITLES[@]} decided in this run."

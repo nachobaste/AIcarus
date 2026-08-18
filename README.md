@@ -123,8 +123,11 @@ setup.sh                       interactive first-run wizard
 
 ## Getting started
 
-1. Clone this repo somewhere under `~/dev/` (or wherever — `setup.sh` and the
-   scripts figure out their own root, they don't assume a path).
+1. Clone this repo to `~/dev/devbrain` (recommended — a handful of scripts
+   default to this exact path for config files they read from a *different*
+   process than the one invoking them, where auto-detecting "wherever you put
+   it" isn't reliable; see `docs/CONCEPTS.md#if-you-clone-this-somewhere-else`
+   if you'd rather use a different name or location).
 2. Run `./setup.sh`. It asks a handful of questions (your GitHub username, which
    repos to manage, which LLM router to use, your Telegram bot token and chat id),
    checks your prerequisites, and writes `devbrain-projects.allow` plus a local,
@@ -171,4 +174,11 @@ say. Write your own.
 
 MIT — see [`LICENSE`](LICENSE). Fork it, adapt it, point it at your own repos.
 No attribution required beyond what MIT already asks for.
-starter kit's code treated once you publish your own fork.
+
+## Contributing
+
+Found a bug, a genericization gap (something that still assumes one specific
+setup), or want to add a swappable piece (another messaging bridge, another LLM
+router)? See [`CONTRIBUTING.md`](CONTRIBUTING.md). For the deeper "why does this
+work this way" behind the five moving parts above, see
+[`docs/CONCEPTS.md`](docs/CONCEPTS.md).
