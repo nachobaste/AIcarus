@@ -14,10 +14,10 @@
       "autoAllowSkills": false,
       "allowlist": [
         {
-          "pattern": "~/dev/machine-config/bin/devbrain"
+          "pattern": "/ABSOLUTE/PATH/TO/YOUR/CLONE/OF/THIS/REPO/bin/devbrain"
         },
         {
-          "pattern": "~/dev/machine-config/bin/devbrain-queue"
+          "pattern": "/ABSOLUTE/PATH/TO/YOUR/CLONE/OF/THIS/REPO/bin/devbrain-queue"
         }
       ]
     }

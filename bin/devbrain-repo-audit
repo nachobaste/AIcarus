@@ -53,9 +53,9 @@ HOME = os.path.expanduser("~")
 OWNER = os.environ.get("REPO_AUDIT_OWNER")
 PROJECTS_DIR = os.environ.get("REPO_AUDIT_PROJECTS_DIR", f"{HOME}/dev/projects")
 ALLOWFILE = os.environ.get("REPO_AUDIT_ALLOWFILE",
-                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+                            f"{HOME}/dev/devbrain/devbrain-projects.allow")
 EXCLUDEFILE = os.environ.get("REPO_AUDIT_EXCLUDEFILE",
-                              f"{HOME}/dev/machine-config/devbrain-projects.excluded")
+                              f"{HOME}/dev/devbrain/devbrain-projects.excluded")
 GH_BIN = os.environ.get("REPO_AUDIT_GH", "gh")
 
 FINDING_NOT_CLONED = "repo-no-clonado"

@@ -29,7 +29,7 @@ import sys
 import urllib.parse
 
 HOME = os.path.expanduser("~")
-SNAPSHOT = os.environ.get("DRIFT_SNAPSHOT", f"{HOME}/dev/machine-config/openclaw/workspace")
+SNAPSHOT = os.environ.get("DRIFT_SNAPSHOT", f"{HOME}/dev/devbrain/openclaw/workspace")
 LIVE = os.environ.get("DRIFT_LIVE", f"{HOME}/dev/scratch/openclaw-workspace")
 WIKI = os.environ.get("DRIFT_WIKI", f"{HOME}/dev/wiki")
 
@@ -44,7 +44,7 @@ def _claude_project_slug(path):
 
 MEMORY = os.environ.get(
     "DRIFT_MEMORY", f"{HOME}/.claude/projects{_claude_project_slug(HOME)}/memory")
-SKILLS = os.environ.get("DRIFT_SKILLS", f"{HOME}/dev/machine-config/claude/skills")
+SKILLS = os.environ.get("DRIFT_SKILLS", f"{HOME}/dev/devbrain/claude/skills")
 
 SKIP_DIRS = {".git", ".obsidian", ".trash", "node_modules"}
 # Runtime state, not persona. Comparing these would make the check fail every
@@ -59,7 +59,7 @@ RUNTIME_ONLY = {"openclaw-workspace-state.json"}
 # (not through the bash wrapper) because this check needs the redacted text
 # back to diff against the original, not just a pass/fail exit code.
 NOTION_REDACT_BIN = os.environ.get(
-    "NOTION_REDACT_BIN", f"{HOME}/dev/machine-config/bin/notion-redact.py")
+    "NOTION_REDACT_BIN", f"{HOME}/dev/devbrain/bin/notion-redact.py")
 
 SKILL_FRONTMATTER_ALLOWED_KEYS = {"name", "description"}
 
@@ -79,7 +79,7 @@ SKILL_PATH_RE = re.compile(
 # Paths under these are explicitly in scope for a skill to cite — e.g. a
 # skill that cites ~/dev/wiki/lessons/<some-lesson>.md as its source of truth.
 # Anything else absolute under home is out of scope.
-SKILL_PATH_ALLOWED_PREFIXES = ("~/dev/wiki", "~/dev/machine-config")
+SKILL_PATH_ALLOWED_PREFIXES = ("~/dev/wiki", "~/dev/devbrain")
 
 SKILL_URL_RE = re.compile(r"https?://[^\s)>\]\"'`]+")
 # Open design decision, easy to extend: start with GitHub (where the repos

@@ -111,9 +111,9 @@ import sys
 HOME = os.path.expanduser("~")
 WIKI = os.environ.get("WIKI_STATUS_AUDIT_WIKI", f"{HOME}/dev/wiki")
 ALLOWFILE = os.environ.get("WIKI_STATUS_AUDIT_ALLOWFILE",
-                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+                            f"{HOME}/dev/devbrain/devbrain-projects.allow")
 SCRAPERS_TSV = os.environ.get("WIKI_STATUS_AUDIT_SCRAPERS_TSV",
-                               f"{HOME}/dev/machine-config/scrapers.tsv")
+                               f"{HOME}/dev/devbrain/scrapers.tsv")
 GH_BIN = os.environ.get("WIKI_STATUS_AUDIT_GH", "gh")
 # No default: a real GitHub username baked in here as a fallback would
 # silently attribute every bare mention to the wrong account on anyone

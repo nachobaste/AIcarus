@@ -38,7 +38,7 @@ description: a clean fixture skill
 # Ok Skill
 
 Cites ~/dev/wiki/lessons/verificacion-ciega-probar-el-instrumento.md and
-~/dev/machine-config/lib/classify.sh as sources, and links to
+~/dev/devbrain/lib/classify.sh as sources, and links to
 https://github.com/testowner/machine-config and https://docs.claude.com/en/docs.
 EOF
 
@@ -164,7 +164,7 @@ DRIFT_SNAPSHOT="$TMP/snap" DRIFT_LIVE="$TMP/live" DRIFT_WIKI="$TMP/wiki" \
 grep -q "nombre-posible" "$OUT" && fail "missing names list should skip the sub-check, not report a finding"
 echo "OK: a missing names list skips the name sub-check instead of failing devbrain-drift"
 
-# (d) absolute paths outside ~/dev/wiki/ and ~/dev/machine-config/
+# (d) absolute paths outside ~/dev/wiki/ and ~/dev/devbrain/
 mkdir -p "$TMP/skills/bad-path"
 printf -- '---\nname: bad-path\ndescription: d\n---\n\nSee /Users/someuser/dev/projects/secret/notes.txt for details.\n' \
   > "$TMP/skills/bad-path/SKILL.md"
@@ -174,7 +174,7 @@ grep -q $'ruta-fuera-de-alcance\tbad-path/SKILL.md\t/Users/someuser/dev/projects
 rm -rf "$TMP/skills/bad-path"
 run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "path plant did not clean up, got $RC ($(cat "$OUT"))"
-echo "OK: skill-content detects an out-of-scope absolute path, silent on ~/dev/wiki/ and ~/dev/machine-config/"
+echo "OK: skill-content detects an out-of-scope absolute path, silent on ~/dev/wiki/ and ~/dev/devbrain/"
 
 # (e) URLs outside the domain allowlist — no real skill has a URL today, so
 # this canary has to be planted by hand rather than found in the repo.

@@ -13,7 +13,7 @@
 # (NOTION_REDACT_BIN). A missing engine must also exit with its OWN distinct code,
 # never "python can't open file" (exit 2), which is indistinguishable from
 # day_engine.py's own deliberate refusals.
-DAY_ENGINE="${DAY_ENGINE:-$HOME/dev/machine-config/lib/day_engine.py}"
+DAY_ENGINE="${DAY_ENGINE:-$HOME/dev/devbrain/lib/day_engine.py}"
 
 day_apply() { # <titulo> dale|no [motivo] [opcion A|B] -> writes/commits, prints a one-line result
   local titulo="$1" decision="$2" motivo="${3:-}" opcion="${4:-}"

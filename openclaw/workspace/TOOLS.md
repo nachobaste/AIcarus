@@ -6,7 +6,10 @@ Your cheat sheet. Fill in the blanks for your own machine and repos.
 
 - The `exec` tool is allowlisted: it can ONLY run `devbrain` and `devbrain-queue`
   (add any other devbrain-family command you've enabled, e.g. a personal-assistant
-  script — keep the list short and explicit). Everything else is DENIED.
+  script — keep the list short and explicit). Everything else is DENIED. The
+  allowlist itself lives in `openclaw/exec-approvals.json` as absolute paths — it
+  must point at wherever YOU cloned this repo, not a placeholder or someone else's
+  path (see setup.sh's final checklist).
 - Pass only the `command` parameter. No `host`, `security`, `elevated`, `&&`, `cd`,
   `npm`, etc.
 - Code flow: `devbrain plan <project> "<task>"` → show the full plan + "Run it?

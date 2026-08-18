@@ -49,9 +49,9 @@ from datetime import datetime, timedelta, timezone
 HOME = os.path.expanduser("~")
 PROJECTS_DIR = os.environ.get("STACKED_PR_PROJECTS_DIR", f"{HOME}/dev/projects")
 ALLOWFILE = os.environ.get("STACKED_PR_ALLOWFILE",
-                            f"{HOME}/dev/machine-config/devbrain-projects.allow")
+                            f"{HOME}/dev/devbrain/devbrain-projects.allow")
 BASE_OVERRIDE_FILE = os.environ.get("STACKED_PR_BASE_OVERRIDE",
-                                     f"{HOME}/dev/machine-config/devbrain-base-branch.override")
+                                     f"{HOME}/dev/devbrain/devbrain-base-branch.override")
 WINDOW_DAYS = int(os.environ.get("STACKED_PR_WINDOW_DAYS", "30"))
 BRANCH_PREFIX = os.environ.get("STACKED_PR_BRANCH_PREFIX", "devbrain/")
 GH_BIN = os.environ.get("STACKED_PR_GH", "gh")

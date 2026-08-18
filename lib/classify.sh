@@ -27,7 +27,7 @@ CLASSIFY_MEMORY="${CLASSIFY_MEMORY:-$HOME/.claude/projects/$(echo "$HOME" | tr '
 # here falls through to the catch-all below. See devbrain-classify.tiers.example
 # for the format if you want to add project-specific tiers of your own (e.g. one
 # repo under a stricter "business-confidential" label, another repo public).
-CLASSIFY_TIERS_FILE="${CLASSIFY_TIERS_FILE:-$HOME/dev/machine-config/devbrain-classify.tiers}"
+CLASSIFY_TIERS_FILE="${CLASSIFY_TIERS_FILE:-$HOME/dev/devbrain/devbrain-classify.tiers}"
 
 classify_tier() {
   local path="$1" line prefix tier
@@ -35,7 +35,7 @@ classify_tier() {
     "$HOME"/dev/personal/*)  printf 'personal\n'; return ;;
     "$HOME"/dev/wiki/*)      printf 'interno-devbrain\n'; return ;;
     "$HOME"/dev/queue/*)     printf 'interno-devbrain\n'; return ;;
-    "$HOME"/dev/machine-config/*) printf 'interno-devbrain\n'; return ;;
+    "$HOME"/dev/devbrain/*)  printf 'interno-devbrain\n'; return ;;
     "$CLASSIFY_MEMORY"/*)    printf 'interno-devbrain\n'; return ;;
   esac
   if [ -f "$CLASSIFY_TIERS_FILE" ]; then
@@ -86,7 +86,7 @@ assert_egress_ok() {
 # the resulting "python can't open file" also exits 2 — indistinguishable by exit
 # code from the deliberate missing-names refusal. A missing redactor exits 3
 # instead, so the two failures can never be confused.
-NOTION_REDACT_BIN="${NOTION_REDACT_BIN:-$HOME/dev/machine-config/bin/notion-redact.py}"
+NOTION_REDACT_BIN="${NOTION_REDACT_BIN:-$HOME/dev/devbrain/bin/notion-redact.py}"
 
 redact_names() {
   if [ ! -f "$NOTION_REDACT_BIN" ]; then
