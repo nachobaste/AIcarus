@@ -33,16 +33,16 @@ import re
 import sys
 import unicodedata
 
-FIELDS = ("repo", "evidencia", "porque", "tamano")
+FIELDS = ("repo", "evidence", "why", "size")
 CITATION = re.compile(r"^(?P<path>.+):(?P<line>\d+)$")
 
 
 def fold(name):
-    """'tamaño' and 'tamano' are the same field.
+    """Case/accent-insensitive key comparison.
 
-    The prompt asks for unaccented keys; a model writing Spanish will produce
-    the accented spelling and be right to. Demanding the misspelling would make
-    the filter reject perfectly good findings as incomplete.
+    The prompt asks for plain-ASCII keys, but a model can still drift on
+    casing or stray whitespace; folding both sides keeps the filter from
+    rejecting a perfectly good finding as incomplete over formatting.
     """
     stripped = unicodedata.normalize("NFKD", name.strip().lower())
     return "".join(c for c in stripped if not unicodedata.combining(c))
@@ -56,7 +56,7 @@ def parse_findings(text):
         if line.startswith("### "):
             if current:
                 findings.append(current)
-            current = {"titulo": line[4:].strip()}
+            current = {"title": line[4:].strip()}
             continue
         if current is None:
             continue
@@ -134,19 +134,19 @@ def existing_titles(path):
 
 
 def render(f):
-    return (f"### {f['titulo']}\n"
+    return (f"### {f['title']}\n"
             f"- repo: {f['repo']}\n"
-            f"- evidencia: {f['evidencia']}\n"
-            f"- porque: {f['porque']}\n"
-            f"- tamano: {f['tamano']}\n")
+            f"- evidence: {f['evidence']}\n"
+            f"- why: {f['why']}\n"
+            f"- size: {f['size']}\n")
 
 
 def main():
     roots = parse_roots()
     missing = [p for _, p in roots if not os.path.isdir(p)]
     if not roots or missing:
-        print("research_filter: repo root no existe: "
-              + (", ".join(missing) or "(ninguno configurado)"), file=sys.stderr)
+        print("research_filter: repo root does not exist: "
+              + (", ".join(missing) or "(none configured)"), file=sys.stderr)
         return 2
     try:
         min_repos = max(1, int(os.environ.get("RESEARCH_MIN_REPOS", "1")))
@@ -158,46 +158,46 @@ def main():
     except ValueError:
         cap = 5
 
-    kept, dropped = [], {"cita-no-resuelve": 0, "duplicado": 0, "incompleto": 0,
-                         "una-sola-repo": 0}
+    kept, dropped = [], {"citation-unresolved": 0, "duplicate": 0, "incomplete": 0,
+                         "single-repo": 0}
     truncated = 0
     seen = set()
 
     for f in parse_findings(sys.stdin.read()):
         if any(not f.get(k) for k in FIELDS):
-            dropped["incompleto"] += 1
+            dropped["incomplete"] += 1
             continue
-        if f["titulo"] in known or f["titulo"] in seen:
-            dropped["duplicado"] += 1
+        if f["title"] in known or f["title"] in seen:
+            dropped["duplicate"] += 1
             continue
-        cites = [c for c in f["evidencia"].split(",") if c.strip()]
+        cites = [c for c in f["evidence"].split(",") if c.strip()]
         # Every citation must hold. One real plus one invented is still a
         # finding that is partly fabricated.
         where = [resolve_in(c, roots) for c in cites]
         if not cites or any(w is None for w in where):
-            dropped["cita-no-resuelve"] += 1
+            dropped["citation-unresolved"] += 1
             continue
         # A connection has to be evidenced in more than one repo, or it is not a
         # connection. Only enforced when the caller asks for it.
         if len(set(where)) < min_repos:
-            dropped["una-sola-repo"] += 1
+            dropped["single-repo"] += 1
             continue
         if len(kept) >= cap:
             # Counted, not swallowed: a truncating tool that reports zero
             # discards reads as "covered everything" when it did not.
             truncated += 1
             continue
-        seen.add(f["titulo"])
+        seen.add(f["title"])
         kept.append(f)
 
     for f in kept:
         print(render(f))
 
     if truncated:
-        dropped["truncado"] = truncated
+        dropped["truncated"] = truncated
     detail = ", ".join(f"{k}: {v}" for k, v in dropped.items() if v)
     total = sum(dropped.values())
-    print(f"hallazgos: {len(kept)} descartados: {total}"
+    print(f"findings: {len(kept)} dropped: {total}"
           + (f" ({detail})" if detail else ""), file=sys.stderr)
     return 0
 

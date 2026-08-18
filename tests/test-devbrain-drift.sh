@@ -67,17 +67,17 @@ echo "OK: memory check prints no file content"
 # ---- 1. openclaw-snapshot, one condition at a time -------------------------
 printf '# Heartbeat\nx\n' > "$TMP/live/HEARTBEAT.md"          # live only
 run > "$OUT" 2>&1
-grep -q $'falta-en-repo\tHEARTBEAT.md' "$OUT" || fail "did not detect file missing from repo"
+grep -q $'missing-in-repo\tHEARTBEAT.md' "$OUT" || fail "did not detect file missing from repo"
 rm "$TMP/live/HEARTBEAT.md"
 
 printf '# Ghost\nx\n' > "$TMP/snap/GHOST.md"                  # repo only
 run > "$OUT" 2>&1
-grep -q $'falta-en-vivo\tGHOST.md' "$OUT" || fail "did not detect file missing from live"
+grep -q $'missing-in-live\tGHOST.md' "$OUT" || fail "did not detect file missing from live"
 rm "$TMP/snap/GHOST.md"
 
 printf '# Soul\nCAMBIADO\n' > "$TMP/live/SOUL.md"             # same name, differs
 run > "$OUT" 2>&1
-grep -q $'contenido-distinto\tSOUL.md' "$OUT" || fail "did not detect differing content"
+grep -q $'content-differs\tSOUL.md' "$OUT" || fail "did not detect differing content"
 printf '# Soul\nbody\n' > "$TMP/live/SOUL.md"
 echo "OK: snapshot detects missing-in-repo, missing-in-live and differing content"
 
@@ -89,24 +89,24 @@ rm "$TMP/wiki/bad-fm.md"
 
 printf 'sin titulo\n' > "$TMP/wiki/bad-h1.md"
 run > "$OUT" 2>&1
-grep -q $'sin-titulo-h1\tbad-h1.md' "$OUT" || fail "did not detect missing H1"
+grep -q $'missing-h1-title\tbad-h1.md' "$OUT" || fail "did not detect missing H1"
 rm "$TMP/wiki/bad-h1.md"
 echo "OK: wiki-format detects frontmatter and missing H1"
 
 # ---- 3. memory-index -------------------------------------------------------
 printf '# Dos\nx\n' > "$TMP/mem/dos.md"                       # file, no index line
 run > "$OUT" 2>&1
-grep -q $'huerfano-sin-indice\tdos.md' "$OUT" || fail "did not detect orphan memory file"
+grep -q $'orphaned-no-index\tdos.md' "$OUT" || fail "did not detect orphan memory file"
 rm "$TMP/mem/dos.md"
 
 printf -- '- [Uno](uno.md) — hook\n- [Fantasma](fantasma.md) — hook\n' > "$TMP/mem/MEMORY.md"
 run > "$OUT" 2>&1
-grep -q $'indice-apunta-a-inexistente\tfantasma.md' "$OUT" || fail "did not detect dangling index line"
+grep -q $'index-points-to-missing\tfantasma.md' "$OUT" || fail "did not detect dangling index line"
 printf -- '- [Uno](uno.md) — hook\n' > "$TMP/mem/MEMORY.md"
 
 printf '# Uno\nsecreto-irrepetible-42\nver [[no-existe]]\n' > "$TMP/mem/uno.md"
 run > "$OUT" 2>&1
-grep -q 'wikilink-no-resuelve' "$OUT" || fail "did not detect unresolved memory wikilink"
+grep -q 'wikilink-unresolved' "$OUT" || fail "did not detect unresolved memory wikilink"
 printf '# Uno\nsecreto-irrepetible-42\n' > "$TMP/mem/uno.md"
 echo "OK: memory-index detects orphans, dangling index lines and bad wikilinks"
 
@@ -125,7 +125,7 @@ echo "OK: stores restored to clean"
 mkdir -p "$TMP/skills/bad-fm"
 printf -- '---\nname: bad-fm\ndescription: d\nextra: nope\n---\n\nbody\n' > "$TMP/skills/bad-fm/SKILL.md"
 run > "$OUT" 2>&1
-grep -q $'frontmatter-clave-extra\tbad-fm/SKILL.md\textra' "$OUT" || fail "did not detect extra frontmatter key"
+grep -q $'frontmatter-extra-key\tbad-fm/SKILL.md\textra' "$OUT" || fail "did not detect extra frontmatter key"
 rm -rf "$TMP/skills/bad-fm"
 run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "frontmatter plant did not clean up, got $RC ($(cat "$OUT"))"
@@ -135,7 +135,7 @@ echo "OK: skill-content detects an extra frontmatter key, silent once removed"
 mkdir -p "$TMP/skills/bad-secret"
 printf -- '---\nname: bad-secret\ndescription: d\n---\n\nsk-abcdefghij1234567890\n' > "$TMP/skills/bad-secret/SKILL.md"
 run > "$OUT" 2>&1
-grep -q $'secreto-posible\tbad-secret/SKILL.md' "$OUT" || fail "did not detect a secret-shaped string"
+grep -q $'possible-secret\tbad-secret/SKILL.md' "$OUT" || fail "did not detect a secret-shaped string"
 grep -q 'sk-abcdefghij1234567890' "$OUT" && fail "leaked the secret itself onto stdout"
 rm -rf "$TMP/skills/bad-secret"
 run > "$OUT" 2>&1; RC=$?
@@ -146,7 +146,7 @@ echo "OK: skill-content detects a secret-shaped string without ever printing it"
 mkdir -p "$TMP/skills/bad-name"
 printf -- '---\nname: bad-name\ndescription: d\n---\n\nFirma Fakesurname Uno hoy.\n' > "$TMP/skills/bad-name/SKILL.md"
 run > "$OUT" 2>&1
-grep -q $'nombre-posible\tbad-name/SKILL.md' "$OUT" || fail "did not detect a redactable name"
+grep -q $'possible-name\tbad-name/SKILL.md' "$OUT" || fail "did not detect a redactable name"
 rm -rf "$TMP/skills/bad-name"
 run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "name plant did not clean up, got $RC ($(cat "$OUT"))"
@@ -161,7 +161,7 @@ DRIFT_SNAPSHOT="$TMP/snap" DRIFT_LIVE="$TMP/live" DRIFT_WIKI="$TMP/wiki" \
   CLASSIFY_NAMES_FILE="$TMP/no-such-names-file.txt" \
   "$BIN" > "$OUT" 2>"$TMP/infra-err"; RC=$?
 [ "$RC" -eq 0 ] || fail "missing names list should not fail the run, got $RC ($(cat "$OUT"))"
-grep -q "nombre-posible" "$OUT" && fail "missing names list should skip the sub-check, not report a finding"
+grep -q "possible-name" "$OUT" && fail "missing names list should skip the sub-check, not report a finding"
 echo "OK: a missing names list skips the name sub-check instead of failing devbrain-drift"
 
 # (d) absolute paths outside ~/dev/wiki/ and ~/dev/devbrain/
@@ -169,7 +169,7 @@ mkdir -p "$TMP/skills/bad-path"
 printf -- '---\nname: bad-path\ndescription: d\n---\n\nSee /Users/someuser/dev/projects/secret/notes.txt for details.\n' \
   > "$TMP/skills/bad-path/SKILL.md"
 run > "$OUT" 2>&1
-grep -q $'ruta-fuera-de-alcance\tbad-path/SKILL.md\t/Users/someuser/dev/projects/secret/notes.txt' "$OUT" \
+grep -q $'path-out-of-scope\tbad-path/SKILL.md\t/Users/someuser/dev/projects/secret/notes.txt' "$OUT" \
   || fail "did not detect an out-of-scope absolute path"
 rm -rf "$TMP/skills/bad-path"
 run > "$OUT" 2>&1; RC=$?
@@ -182,7 +182,7 @@ mkdir -p "$TMP/skills/bad-url"
 printf -- '---\nname: bad-url\ndescription: d\n---\n\nSee https://evil.example.com/phish for details.\n' \
   > "$TMP/skills/bad-url/SKILL.md"
 run > "$OUT" 2>&1
-grep -q $'url-fuera-de-allowlist\tbad-url/SKILL.md\tevil.example.com' "$OUT" || fail "did not detect an out-of-allowlist URL"
+grep -q $'url-outside-allowlist\tbad-url/SKILL.md\tevil.example.com' "$OUT" || fail "did not detect an out-of-allowlist URL"
 rm -rf "$TMP/skills/bad-url"
 run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "url plant did not clean up, got $RC ($(cat "$OUT"))"

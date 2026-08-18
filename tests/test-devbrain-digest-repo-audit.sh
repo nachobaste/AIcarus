@@ -5,7 +5,7 @@
 # DEVBRAIN_DIGEST_*_BIN override, never PATH (that hardcoded `export PATH=...`
 # defeated a PATH-prepend trick once already and sent a live Telegram digest
 # during testing). The one property that matters: repo names must survive the
-# AI summarizer verbatim, the same reason Propuestas/Bloqueadas bypass it —
+# AI summarizer verbatim, the same reason Proposals/Blocked bypass it —
 # a paraphrased or dropped repo name defeats the entire point of this check.
 set -uo pipefail
 export DEVBRAIN_NO_TG=1
@@ -84,9 +84,9 @@ echo "OK: zero findings means no section, no false alarm"
 # ---- 3. repo-audit finds two repos: both names reach the message verbatim --
 cat > "$TMP/fake-repo-audit-findings" <<'EOF'
 #!/bin/bash
-printf 'repo-no-clonado\trepob\t2026-08-11T23:47:12Z\n'
-printf 'repo-sin-clasificar\trepob\t2026-08-11T23:47:12Z\n'
-printf 'repo-no-clonado\trepoc\t2026-07-20T18:56:55Z\n'
+printf 'repo-not-cloned\trepob\t2026-08-11T23:47:12Z\n'
+printf 'repo-unclassified\trepob\t2026-08-11T23:47:12Z\n'
+printf 'repo-not-cloned\trepoc\t2026-07-20T18:56:55Z\n'
 echo "repo-audit: 3"
 EOF
 chmod +x "$TMP/fake-repo-audit-findings"
@@ -105,6 +105,6 @@ AI_LINE=$(grep -n "RESUMEN-IA:" "$SENT" | head -1 | cut -d: -f1)
 SEC_LINE=$(grep -n -i "unclassified" "$SENT" | head -1 | cut -d: -f1)
 [ -n "$AI_LINE" ] && [ -n "$SEC_LINE" ] && [ "$AI_LINE" -lt "$SEC_LINE" ] \
   || fail "the repo-audit block does not come after the AI summary"
-echo "OK: the repo-audit block is appended after the AI summary, same as Propuestas/Bloqueadas"
+echo "OK: the repo-audit block is appended after the AI summary, same as Proposals/Blocked"
 
 echo "PASS"

@@ -17,7 +17,7 @@ mkplan() { # <file> <repo> <status> <approved:0|1>
 mkplan "10-repoa--a.plan.md" repoa approved 1
 mkplan "20-otro--b.plan.md"        otro         approved 1
 mkplan "30-repoa--c.plan.md" repoa approved 0   # approved but NO aprobado: line
-mkplan "40-repoa--d.plan.md" repoa solicitado 0
+mkplan "40-repoa--d.plan.md" repoa requested 0
 
 # stub devbrain: first repo succeeds, second fails, third hits the real-world
 # Max session-limit message (must trigger the quota-pause path, not failed)
@@ -66,7 +66,7 @@ rm "$DEVBRAIN_QUEUE_DIR/90-repoa--locked.plan.md"
 [ "$(fm_get "$DEVBRAIN_QUEUE_DIR/20-otro--b.plan.md" status)" = "failed" ] && echo "OK: failure -> failed, night continued" || exit 1
 fm_get "$DEVBRAIN_QUEUE_DIR/20-otro--b.plan.md" motivo_fallo | grep -q "exit 1" && echo "OK: motivo_fallo recorded" || exit 1
 [ "$(fm_get "$DEVBRAIN_QUEUE_DIR/30-repoa--c.plan.md" status)" = "approved" ] && echo "OK: no-aprobado line refused" || exit 1
-[ "$(fm_get "$DEVBRAIN_QUEUE_DIR/40-repoa--d.plan.md" status)" = "solicitado" ] && echo "OK: solicitado untouched" || exit 1
+[ "$(fm_get "$DEVBRAIN_QUEUE_DIR/40-repoa--d.plan.md" status)" = "requested" ] && echo "OK: requested untouched" || exit 1
 [ -f "$DEVBRAIN_QUEUE_DIR/night-report-latest.md" ] && echo "OK: night report written" || exit 1
 grep -q "pull/7" "$DEVBRAIN_QUEUE_DIR/night-report-latest.md" && echo "OK: report lists the PR" || exit 1
 # plan body was staged into the project's .devbrain dir

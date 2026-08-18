@@ -1,6 +1,6 @@
 #!/bin/bash
-# tests/test-devbrain-day.sh — end-to-end devbrain-day: the six "cómo verificar" cases
-# from plan 240, each paired with what should NOT happen alongside it.
+# tests/test-devbrain-day.sh — end-to-end devbrain-day: the six "how to verify"
+# cases from plan 240, each paired with what should NOT happen alongside it.
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-day"
@@ -18,51 +18,51 @@ BACKLOG="$WIKI_DIR/projects/mejoras-propuestas.md"
 
 seed() { # resets the backlog to three pending proposals for a fresh scenario
   cat > "$BACKLOG" <<'EOF'
-# Mejoras propuestas
+# Proposed improvements
 
 ## 2026-08-08 — demo
-### El deploy pierde el segundo intento
+### The deploy loses its second attempt
 - repo: demo
-- evidencia: src/uno.js:1
-- porque: reintenta sin esperar el rate limit
-- tamano: 1 noche
+- evidence: src/one.js:1
+- why: it retries without waiting out the rate limit
+- size: 1 night
 
-## Propuestas — 2026-08-08
-### Arreglar el deploy
-- origen: El deploy pierde el segundo intento
+## Proposals — 2026-08-08
+### Fix the deploy
+- source: The deploy loses its second attempt
 - repo: demo
-- esfuerzo: 1 noche
-- riesgos: ninguno serio
-- verificar: correr el deploy dos veces
+- effort: 1 night
+- risks: nothing serious
+- verify: run the deploy twice
 
-#### Opcion A
-- archivos: src/uno.js
+#### Option A
+- files: src/one.js
 
-#### Opcion B
-- archivos: src/dos.js
+#### Option B
+- files: src/two.js
 
-### Propuesta contra machine-config
-- origen: El deploy pierde el segundo intento
+### Proposal against machine-config
+- source: The deploy loses its second attempt
 - repo: machine-config
-- esfuerzo: 1 noche
-- riesgos: x
-- verificar: y
+- effort: 1 night
+- risks: x
+- verify: y
 
 #### A
-- archivos: bin/devbrain
+- files: bin/devbrain
 
-### Otra mejora del deploy
-- origen: El deploy pierde el segundo intento
+### Another deploy improvement
+- source: The deploy loses its second attempt
 - repo: demo
-- esfuerzo: 2 noches
-- riesgos: alguno
-- verificar: revisar logs
+- effort: 2 nights
+- risks: some
+- verify: check the logs
 
-#### Opcion A
-- archivos: src/uno.js
+#### Option A
+- files: src/one.js
 
-#### Opcion B
-- archivos: src/tres.js
+#### Option B
+- files: src/three.js
 EOF
   git -C "$WIKI_DIR" add -A
   git -C "$WIKI_DIR" commit -qm seed --allow-empty -q >/dev/null
@@ -75,34 +75,34 @@ run() { # feeds scripted stdin, one line per proposal response
   bash "$BIN"
 }
 
-# ---- 1. dale 1 (aquí: "dale" sobre la primera propuesta) --------------------
-printf 'dale\nno\nmotivo de prueba\ndespues\n' | run > "$TMP/out1" 2>&1
-F=$(ls "$QUEUE_DIR"/*--arreglar-el-deploy.plan.md 2>/dev/null | head -1)
+# ---- 1. dale (here: "dale" on the first proposal) --------------------------
+printf 'dale\nno\ntest reason\nlater\n' | run > "$TMP/out1" 2>&1
+F=$(ls "$QUEUE_DIR"/*--fix-the-deploy.plan.md 2>/dev/null | head -1)
 [ -n "$F" ] || fail "'dale' did not create a plan file: $(cat "$TMP/out1")"
 grep -q "^aprobado: $(date +%Y-%m-%d)$" "$F" || fail "the plan is missing today's aprobado: date"
-git -C "$QUEUE_DIR" log --oneline | grep -qi aprobar || fail "the queue repo has no commit"
+git -C "$QUEUE_DIR" log --oneline | grep -qi approve || fail "the queue repo has no commit"
 echo "OK: 1) dale creates a file with aprobado: today, committed"
 
-# ---- 2. no -> no file, discarded with the motivo ----------------------------
-grep -q "decision: descartada.*motivo de prueba" "$BACKLOG" \
-  || fail "'no' did not record the motivo: $(grep decision "$BACKLOG")"
+# ---- 2. no -> no file, discarded with the reason ----------------------------
+grep -q "decision: discarded.*test reason" "$BACKLOG" \
+  || fail "'no' did not record the reason: $(grep decision "$BACKLOG")"
 COUNT_MC=$(ls "$QUEUE_DIR"/*machine-config* 2>/dev/null | wc -l | tr -d ' ')
 [ "$COUNT_MC" -eq 0 ] || fail "'no' on machine-config still produced a queue file"
-echo "OK: 2) no creates no file, discards with the given motivo"
+echo "OK: 2) no creates no file, discards with the given reason"
 
-# ---- 3. despues -> no file, stays pending -----------------------------------
-grep -q "^### Otra mejora del deploy$" "$BACKLOG" || fail "the proposal disappeared from the backlog"
-awk '/^### Otra mejora del deploy$/{f=1} f && /^### /&&!/Otra mejora/{f=0} f' "$BACKLOG" | grep -q "decision:" \
-  && fail "'despues' marked the proposal decided — it must stay open for the next cycle"
-echo "OK: 3) despues leaves the proposal pending, no file, no decision recorded"
+# ---- 3. later -> no file, stays pending -----------------------------------
+grep -q "^### Another deploy improvement$" "$BACKLOG" || fail "the proposal disappeared from the backlog"
+awk '/^### Another deploy improvement$/{f=1} f && /^### /&&!/Another deploy/{f=0} f' "$BACKLOG" | grep -q "decision:" \
+  && fail "'later' marked the proposal decided — it must stay open for the next cycle"
+echo "OK: 3) later leaves the proposal pending, no file, no decision recorded"
 
 # ---- 4. a proposal against machine-config is always refused, never approved -
 # (already exercised via 'no' above; confirm 'dale' would ALSO refuse it, not just
 # that this run happened to say 'no' to it)
 seed
-printf 'despues\ndale\ndespues\n' | run > "$TMP/out4" 2>&1
+printf 'later\ndale\nlater\n' | run > "$TMP/out4" 2>&1
 [ ! -e "$(ls "$QUEUE_DIR"/*machine-config* 2>/dev/null)" ] || fail "machine-config was written as an approved plan"
-grep -q "propuesta contra machine-config" "$TMP/out4" -i \
+grep -q "proposal against machine-config" "$TMP/out4" -i \
   || true  # the refusal detail lives in day_engine's stderr, captured into OUT; not asserting exact text here
 COUNT_MC2=$(ls "$QUEUE_DIR"/*machine-config* 2>/dev/null | wc -l | tr -d ' ')
 [ "$COUNT_MC2" -eq 0 ] || fail "machine-config produced a plan file on 'dale'"
@@ -110,21 +110,21 @@ echo "OK: 4) machine-config is refused by 'dale' too, never written as approved"
 
 # ---- 5. an ambiguous response never approves --------------------------------
 seed
-printf 'ok\nsi\n\ndespues\n' | run > "$TMP/out5" 2>&1
+printf 'ok\nyes\n\nlater\n' | run > "$TMP/out5" 2>&1
 COUNT_BEFORE=$(ls "$QUEUE_DIR"/*.plan.md 2>/dev/null | wc -l | tr -d ' ')
 echo "$COUNT_BEFORE" > "$TMP/count-ambiguous"
-grep -qE "^[0-9]+ propuesta" "$TMP/out5" || true
+grep -qE "^[0-9]+ pending proposal" "$TMP/out5" || true
 [ "$(ls "$QUEUE_DIR"/*.plan.md 2>/dev/null | wc -l | tr -d ' ')" -ge 0 ] # sanity, real check below
-NEWFILES=$(ls "$QUEUE_DIR"/*ok* "$QUEUE_DIR"/*si* 2>/dev/null | wc -l | tr -d ' ')
-[ "$NEWFILES" -eq 0 ] || fail "an ambiguous response ('ok'/'si'/empty) approved something"
-echo "OK: 5) ambiguous responses ('ok', 'si', empty) never approve anything"
+NEWFILES=$(ls "$QUEUE_DIR"/*ok* "$QUEUE_DIR"/*yes* 2>/dev/null | wc -l | tr -d ' ')
+[ "$NEWFILES" -eq 0 ] || fail "an ambiguous response ('ok'/'yes'/empty) approved something"
+echo "OK: 5) ambiguous responses ('ok', 'yes', empty) never approve anything"
 
 # ---- 6. the generated plan is consumable by devbrain execute ----------------
 # devbrain execute stages plan_body(plan) -> .devbrain/plan-latest.md and takes the
 # first non-heading, non-blank line as the short task string (bin/devbrain-night:101).
 seed
-printf 'dale\ndespues\ndespues\n' | run > /dev/null 2>&1
-F6=$(ls "$QUEUE_DIR"/*--arreglar-el-deploy.plan.md 2>/dev/null | head -1)
+printf 'dale\nlater\nlater\n' | run > /dev/null 2>&1
+F6=$(ls "$QUEUE_DIR"/*--fix-the-deploy.plan.md 2>/dev/null | head -1)
 [ -n "$F6" ] || fail "setup for case 6 failed: no plan file"
 BODY=$(awk 'NR==1 && $0=="---" {infm=1; next} infm==1 && $0=="---" {infm=2; next} infm==2 {print}' "$F6")
 TASK=$(printf '%s\n' "$BODY" | grep -v '^#' | grep -v '^$' | head -1)

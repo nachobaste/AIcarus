@@ -103,12 +103,12 @@ def check_openclaw_snapshot():
     out = []
     repo, live = top_level_md(SNAPSHOT), top_level_md(LIVE)
     for name in sorted(live - repo):
-        out.append(("openclaw-snapshot", f"falta-en-repo\t{name}"))
+        out.append(("openclaw-snapshot", f"missing-in-repo\t{name}"))
     for name in sorted(repo - live):
-        out.append(("openclaw-snapshot", f"falta-en-vivo\t{name}"))
+        out.append(("openclaw-snapshot", f"missing-in-live\t{name}"))
     for name in sorted(repo & live):
         if read(os.path.join(SNAPSHOT, name)) != read(os.path.join(LIVE, name)):
-            out.append(("openclaw-snapshot", f"contenido-distinto\t{name}"))
+            out.append(("openclaw-snapshot", f"content-differs\t{name}"))
     return out
 
 
@@ -130,7 +130,7 @@ def check_wiki_format():
             if first.strip() == "---":
                 out.append(("wiki-format", f"frontmatter-yaml\t{rel}"))
             elif not first.startswith("# "):
-                out.append(("wiki-format", f"sin-titulo-h1\t{rel}"))
+                out.append(("wiki-format", f"missing-h1-title\t{rel}"))
     return out
 
 
@@ -143,7 +143,7 @@ def check_memory_index():
     out = []
     index_path = os.path.join(MEMORY, "MEMORY.md")
     if not os.path.isfile(index_path):
-        return [("memory-index", "falta-indice\tMEMORY.md")]
+        return [("memory-index", "missing-index\tMEMORY.md")]
     index = read(index_path)
 
     files = {f for f in os.listdir(MEMORY)
@@ -152,11 +152,11 @@ def check_memory_index():
 
     for name in sorted(files):
         if f"({name})" not in index:
-            out.append(("memory-index", f"huerfano-sin-indice\t{name}"))
+            out.append(("memory-index", f"orphaned-no-index\t{name}"))
 
     for target in sorted(set(re.findall(r'\]\(([a-z0-9][a-z0-9._-]*\.md)\)', index))):
         if not os.path.isfile(os.path.join(MEMORY, target)):
-            out.append(("memory-index", f"indice-apunta-a-inexistente\t{target}"))
+            out.append(("memory-index", f"index-points-to-missing\t{target}"))
 
     slugs = set()
     for name in sorted(files | {"MEMORY.md"}):
@@ -164,7 +164,7 @@ def check_memory_index():
                                 read(os.path.join(MEMORY, name))))
     for slug in sorted(slugs):
         if not os.path.isfile(os.path.join(MEMORY, f"{slug}.md")):
-            out.append(("memory-index", f"wikilink-no-resuelve\t[[{slug}]]"))
+            out.append(("memory-index", f"wikilink-unresolved\t[[{slug}]]"))
     return out
 
 
@@ -265,25 +265,25 @@ def check_skill_content():
                 if m:
                     keys.add(m.group(1))
             for key in sorted(keys - SKILL_FRONTMATTER_ALLOWED_KEYS):
-                out.append(("skill-content", f"frontmatter-clave-extra\t{rel}\t{key}"))
+                out.append(("skill-content", f"frontmatter-extra-key\t{rel}\t{key}"))
 
         if SECRET_PATTERNS.search(body):
-            out.append(("skill-content", f"secreto-posible\t{rel}"))
+            out.append(("skill-content", f"possible-secret\t{rel}"))
 
         redacted = redact_skill_body(body)
         if redacted:
-            out.append(("skill-content", f"nombre-posible\t{rel}"))
+            out.append(("skill-content", f"possible-name\t{rel}"))
 
         for m in SKILL_PATH_RE.finditer(body):
             raw = m.group(0).rstrip(".,;:)]}'\"`")
             if not skill_path_allowed(normalize_skill_path(raw)):
-                out.append(("skill-content", f"ruta-fuera-de-alcance\t{rel}\t{raw}"))
+                out.append(("skill-content", f"path-out-of-scope\t{rel}\t{raw}"))
 
         for m in SKILL_URL_RE.finditer(body):
             url = m.group(0).rstrip(".,;:)]}'\"`")
             domain = urllib.parse.urlparse(url).netloc.split("@")[-1].split(":")[0]
             if not skill_url_domain_allowed(domain):
-                out.append(("skill-content", f"url-fuera-de-allowlist\t{rel}\t{domain}"))
+                out.append(("skill-content", f"url-outside-allowlist\t{rel}\t{domain}"))
     return out
 
 
@@ -293,7 +293,7 @@ def main(argv):
                         ("DRIFT_WIKI", WIKI), ("DRIFT_MEMORY", MEMORY),
                         ("DRIFT_SKILLS", SKILLS)):
         if not os.path.isdir(path):
-            print(f"devbrain-drift: {label} no existe: {path}", file=sys.stderr)
+            print(f"devbrain-drift: {label} does not exist: {path}", file=sys.stderr)
             return 2
 
     findings = (check_openclaw_snapshot()

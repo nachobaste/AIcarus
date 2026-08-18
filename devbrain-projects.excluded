@@ -4,7 +4,7 @@
 #
 # A repo listed here stops appearing in the digest even if it's not in .allow and
 # not cloned locally. NOT listing it here (and not being in .allow) is what makes
-# devbrain-repo-audit flag it as "repo-sin-clasificar" (unclassified).
+# devbrain-repo-audit flag it as "repo-unclassified".
 #
 # Format: name  # reason
 #

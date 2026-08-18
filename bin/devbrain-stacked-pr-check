@@ -187,7 +187,7 @@ def check_project(project, base_overrides, cutoff_date):
         # Fetch this specific branch tip. If it fails, the branch was deleted on
         # the remote (e.g. auto-delete-on-merge) -- unverifiable by this cheap
         # method, not an error, and out of scope (the lesson's own wording is
-        # framed around "la punta de la rama", which requires the ref to exist).
+        # framed around "the tip of the branch", which requires the ref to exist).
         ok, _ = run([GIT_BIN, "-C", project_dir, "fetch", "-q", "origin",
                      f"+refs/heads/{branch}:refs/remotes/origin/{branch}"])
         if not ok:

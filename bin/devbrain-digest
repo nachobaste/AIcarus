@@ -88,10 +88,10 @@ fi
 # AI summarizer below on purpose: a Telegram approval path (e.g. replying "dale 2")
 # needs the numbering to stay exact and stable. A model asked to "summarize" is
 # free to reword or drop a line; a plain append is not.
-PROPUESTAS=""
+PROPOSALS=""
 BACKLOG_FILE="$WIKI_DIR/projects/mejoras-propuestas.md"
 if [ -f "$BACKLOG_FILE" ]; then
-  PROPUESTAS="$(python3 "$ROOT_LIB/research_promote.py" digest < "$BACKLOG_FILE" 2>>"$LOG")"
+  PROPOSALS="$(python3 "$ROOT_LIB/research_promote.py" digest < "$BACKLOG_FILE" 2>>"$LOG")"
 fi
 
 # Repos that devbrain-repo-audit finds unclassified or not cloned locally —
@@ -100,12 +100,12 @@ fi
 # respond (set -u, no -e; the script itself returns 2 and prints nothing else in
 # that case).
 REPO_AUDIT_BIN="${DEVBRAIN_REPO_AUDIT_BIN:-$(dirname "$0")/devbrain-repo-audit}"
-SINCLASIFICAR=""
+UNCLASSIFIED=""
 if [ -x "$REPO_AUDIT_BIN" ]; then
   AUDIT_OUT=$("$REPO_AUDIT_BIN" 2>>"$LOG")
-  SINCLASIFICAR=$(printf '%s\n' "$AUDIT_OUT" | awk -F'\t' '
-    $1 == "repo-no-clonado"     { print "  - " $2 " — not cloned locally (last push: " $3 ")" }
-    $1 == "repo-sin-clasificar" { print "  - " $2 " — not added to .allow or .excluded (last push: " $3 ")" }
+  UNCLASSIFIED=$(printf '%s\n' "$AUDIT_OUT" | awk -F'\t' '
+    $1 == "repo-not-cloned"   { print "  - " $2 " — not cloned locally (last push: " $3 ")" }
+    $1 == "repo-unclassified" { print "  - " $2 " — not added to .allow or .excluded (last push: " $3 ")" }
   ')
 fi
 
@@ -119,24 +119,24 @@ fi
 # available is the file's last modification — a PROXY, not a confirmed blocking
 # date (see queue_file_age_days in lib/queue.sh). That's why it's marked with "~"
 # and "per last modification" instead of saying "blocked since".
-BLOQUEADAS=""
+BLOCKED=""
 for f in "$QUEUE_DIR"/*.plan.md; do
   [ -e "$f" ] || continue
   [ "$(fm_get "$f" status)" = "blocked" ] || continue
-  edad="$(queue_file_age_days "$f" 2>/dev/null)"
-  case "$edad" in ''|*[!0-9]*) edad="" ;; esac
-  sufijo=""
+  age="$(queue_file_age_days "$f" 2>/dev/null)"
+  case "$age" in ''|*[!0-9]*) age="" ;; esac
+  suffix=""
   bullet="-"
-  if [ -n "$edad" ]; then
-    palabra="days"; [ "$edad" = "1" ] && palabra="day"
-    sufijo=" (blocked ~$edad $palabra ago, per last modification)"
-    [ "$edad" -ge "$DEVBRAIN_DIGEST_STALE_DAYS" ] && bullet="⚠️"
+  if [ -n "$age" ]; then
+    word="days"; [ "$age" = "1" ] && word="day"
+    suffix=" (blocked ~$age $word ago, per last modification)"
+    [ "$age" -ge "$DEVBRAIN_DIGEST_STALE_DAYS" ] && bullet="⚠️"
   fi
-  BLOQUEADAS="${BLOQUEADAS}${bullet} $(basename "$f") → missing: \`$(fm_get "$f" bloqueado_por)\`${sufijo}
+  BLOCKED="${BLOCKED}${bullet} $(basename "$f") → missing: \`$(fm_get "$f" bloqueado_por)\`${suffix}
 "
 done
 
-if [ -z "$ACTIVITY" ] && [ -z "$PRS" ] && [ -z "$NIGHT" ] && [ -z "$AUDIT" ] && [ -z "$PROPUESTAS" ] && [ -z "$BLOQUEADAS" ] && [ -z "$SINCLASIFICAR" ]; then
+if [ -z "$ACTIVITY" ] && [ -z "$PRS" ] && [ -z "$NIGHT" ] && [ -z "$AUDIT" ] && [ -z "$PROPOSALS" ] && [ -z "$BLOCKED" ] && [ -z "$UNCLASSIFIED" ]; then
   MSG="☀️ Good morning. No code changes in the last 24h. All quiet."
 else
   CONTEXT="Night report:\n${NIGHT:-(did not run)}\n\nGit activity last 24h:${ACTIVITY:-\n(none)}\n\nOpen PRs waiting on your review:\n${PRS:-  (none)}\n\nStatus board:\n${BOARD:-(empty)}\n\nWiki changes (24h):\n${WIKIDIFF:-(none)}\n\nMessaging-bridge agent actions in 24h (metadata):\n${AUDIT:-(none)}"
@@ -157,26 +157,26 @@ $(cat)" 2>>"$LOG")
 fi
 
 # The proposals block is appended AFTER the AI-generated summary, verbatim — see
-# the comment above where PROPUESTAS is built.
-if [ -n "$PROPUESTAS" ]; then
+# the comment above where PROPOSALS is built.
+if [ -n "$PROPOSALS" ]; then
   MSG="$MSG
 
 📋 Proposals waiting on your decision:
-$PROPUESTAS"
+$PROPOSALS"
 fi
 
-if [ -n "$BLOQUEADAS" ]; then
+if [ -n "$BLOCKED" ]; then
   MSG="$MSG
 
 🚧 Blocked tasks, waiting for you to add the permission:
-$BLOQUEADAS"
+$BLOCKED"
 fi
 
-if [ -n "$SINCLASIFICAR" ]; then
+if [ -n "$UNCLASSIFIED" ]; then
   MSG="$MSG
 
 🔍 Unclassified repos (add them to .allow or .excluded):
-$SINCLASIFICAR"
+$UNCLASSIFIED"
 fi
 
 # Telegram is not in the critical path for ALERTS elsewhere (bin/devbrain-night),

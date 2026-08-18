@@ -12,19 +12,19 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   a hardcoded path, a username, a company name, an assumption that only holds for
   the original author's machine. These are the highest-value contributions: a
   starter kit that quietly only works for its own creator isn't a starter kit.
-  **Known open gap, largest one left:** the interactive/LLM-facing scripts —
-  `bin/devbrain-interview`, `bin/devbrain-day`, `bin/devbrain-queue`,
-  `bin/devbrain-digest`, `bin/devbrain-wiki-status-audit`,
-  `bin/devbrain-repo-audit`, `bin/devbrain-research`, `lib/day.sh`,
-  `lib/day_engine.py`, `lib/research_promote.py` — still carry the original
-  author's Spanish-language, informal-`vos` system prompts and user-facing
-  strings verbatim. They work (nothing here is broken), but they're the most
-  visible remaining sign this was extracted from one specific, non-English
-  setup rather than written as a template. A PR translating one script at a
-  time to a neutral, second-person-`you` English prompt — re-running that
-  script's own `tests/test-*.sh` afterward, since these are executable prompts
-  and not just comments — is exactly the kind of contribution this section
-  describes.
+  **Known open gap:** `bin/notion-sync-sources.py` and `bin/notion-sync-upsert.py`
+  (the optional Notion mirror) still model a Notion database schema with the
+  original author's own Spanish property names (`Semáforo`, `Motivo del
+  semáforo`, `Código`, `Área`, `Categoría`, ...). This is different in kind from
+  the interactive/LLM-facing scripts (already translated, see `git log`): a
+  Notion sync is inherently a worked example against *someone's* real database
+  schema, and whoever adopts it has to redesign the property mapping for their
+  own workspace either way — English vs. Spanish property names in the example
+  doesn't change that. Still, a PR that reworks the example around generic
+  English property names (updating both files' field-mapping tables together,
+  since they must agree on names) would remove the last visible sign this was
+  extracted from one specific setup, and is a legitimate contribution under
+  this category.
 - **A swappable piece that isn't actually swappable.** The README claims the
   messaging bridge, the LLM router, and the coding agent are all replaceable. If
   you tried to swap one and hit a place that assumed OpenClaw, or Kimi, or Claude

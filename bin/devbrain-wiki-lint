@@ -1,13 +1,13 @@
 #!/bin/bash
-# devbrain-wiki-lint — mantenimiento semanal de la wiki (patron Karpathy: lint).
-# Claude Code busca contradicciones, datos obsoletos, paginas huerfanas; arregla y commitea.
-# Diseno: ARCHITECTURE.md (seccion sobre mantenimiento de wiki). Corre semanal via launchd.
+# devbrain-wiki-lint — weekly wiki maintenance (Karpathy pattern: lint).
+# Claude Code looks for contradictions, stale data, orphaned pages; fixes and commits.
+# Design: ARCHITECTURE.md (wiki maintenance section). Runs weekly via launchd.
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 WIKI="$HOME/dev/wiki"
 if [ -z "${DEVBRAIN_TG_CHAT_ID:-}" ]; then
-  echo "devbrain-wiki-lint: DEVBRAIN_TG_CHAT_ID no esta seteado (tu chat id de Telegram)." >&2
-  echo "devbrain-wiki-lint: no hay valor por defecto -- seteala en el entorno antes de correr esto." >&2
+  echo "devbrain-wiki-lint: DEVBRAIN_TG_CHAT_ID is not set (your Telegram chat id)." >&2
+  echo "devbrain-wiki-lint: there is no default -- set it in the environment before running this." >&2
   exit 1
 fi
 TG_ID="$DEVBRAIN_TG_CHAT_ID"
@@ -27,29 +27,29 @@ echo "[$(date)] wiki-lint linkcheck: $(printf '%s' "$BROKEN" | head -2 | tr '\n'
 
 SUMMARY=$(claude -p --permission-mode acceptEdits \
   --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*)" \
-  "Eres el mantenedor de esta wiki (~/dev/wiki). Lee SCHEMA.md para las reglas. Haz un LINT:
-1) Busca contradicciones entre paginas, datos obsoletos, y paginas huerfanas (sin enlaces).
-2) Verifica que index.md liste todas las paginas. Los enlaces rotos YA estan detectados —
-   este es el reporte de \`wiki-linkcheck\`, arregla exactamente estos y ninguno mas:
---- inicio del reporte ---
+  "You are the maintainer of this wiki (~/dev/wiki). Read SCHEMA.md for the rules. Do a LINT:
+1) Look for contradictions between pages, stale data, and orphaned pages (no links to them).
+2) Verify that index.md lists every page. Broken links are ALREADY detected —
+   this is \`wiki-linkcheck\`'s report, fix exactly these and no others:
+--- start of report ---
 $BROKEN
---- fin del reporte ---
-   Para cada uno: si la pagina existe con otro nombre, reapunta el enlace; si no existe en
-   la wiki, convertilo a texto plano. NUNCA inventes una pagina para satisfacer un enlace.
-   Usa enlaces markdown relativos, el formato que pide SCHEMA.md.
-3) Arregla lo que puedas directamente (ediciones pequenas y seguras). NO borres paginas.
-4) Registra el pase en log.md con formato '## [YYYY-MM-DD] lint | resumen'.
-5) Haz commit de los cambios con mensaje 'wiki: lint semanal'. NO hagas push.
-Al final responde en espanol, 1-3 lineas, que encontraste y arreglaste." 2>>"$LOG")
+--- end of report ---
+   For each one: if the page exists under another name, repoint the link; if it doesn't
+   exist anywhere in the wiki, convert it to plain text. NEVER invent a page to satisfy a link.
+   Use relative markdown links, the format SCHEMA.md asks for.
+3) Fix what you can directly (small, safe edits). Do NOT delete pages.
+4) Log the pass in log.md, format '## [YYYY-MM-DD] lint | summary'.
+5) Commit the changes with the message 'wiki: weekly lint'. Do NOT push.
+At the end, reply in English, 1-3 lines, on what you found and fixed." 2>>"$LOG")
 
-git push -q 2>>"$LOG" || true   # push del commit del lint
+git push -q 2>>"$LOG" || true   # push the lint's commit
 
 # Verify the repair actually landed. Trusting the model's own summary here is
 # the same mistake this script exists to stop.
 if "$LINKCHECK" --quiet "$WIKI"; then
-  LINKS="enlaces OK"
+  LINKS="links OK"
 else
-  LINKS="⚠️ quedan $("$LINKCHECK" "$WIKI" | sed -n 's/^unresolved: //p') enlaces rotos"
+  LINKS="⚠️ $("$LINKCHECK" "$WIKI" | sed -n 's/^unresolved: //p') broken link(s) remain"
 fi
 
 # Drift between stores, and orphaned stacked-PR merges, are reported, never
@@ -60,39 +60,38 @@ fi
 # links are.
 DRIFTCHECK="$(cd "$(dirname "$0")" && pwd)/devbrain-drift"
 if "$DRIFTCHECK" --quiet; then
-  DRIFT="sin drift"
+  DRIFT="no drift"
 else
-  DRIFT="⚠️ $("$DRIFTCHECK" | sed -n 's/^drift: //p') drift entre almacenes"
+  DRIFT="⚠️ $("$DRIFTCHECK" | sed -n 's/^drift: //p') drift between stores"
   echo "[$(date)] wiki-lint drift:" >> "$LOG"
   "$DRIFTCHECK" >> "$LOG" 2>&1
 fi
 
-# PRs apilados que salieron MERGED en GitHub pero nunca llegaron a la rama base
-# real (ver wiki/lessons/pr-apilado-mergeado-nunca-llega-a-main.md, caso
-# example-repo#17). Mismo contrato que devbrain-drift (exit 0/1/2, TSV), pero
-# es una categoria distinta -- estado de git remoto, no almacenes de
-# conocimiento -- por eso vive en su propio script en vez de ser un quinto
-# chequeo de devbrain-drift.
+# Stacked PRs that came back MERGED on GitHub but never actually reached the
+# real base branch (see wiki/lessons/pr-apilado-mergeado-nunca-llega-a-main.md,
+# example-repo#17 case). Same contract as devbrain-drift (exit 0/1/2, TSV), but
+# it's a different category -- git-remote state, not knowledge stores -- which
+# is why it lives in its own script instead of being a fifth devbrain-drift check.
 STACKEDCHECK="$(cd "$(dirname "$0")" && pwd)/devbrain-stacked-pr-check"
 if "$STACKEDCHECK" --quiet; then
-  STACKED="sin PRs apilados huerfanos"
+  STACKED="no orphaned stacked PRs"
 else
-  STACKED="⚠️ $("$STACKEDCHECK" | sed -n 's/^stacked-pr: //p') PR(s) apilado(s) huerfano(s)"
+  STACKED="⚠️ $("$STACKEDCHECK" | sed -n 's/^stacked-pr: //p') orphaned stacked PR(s)"
   echo "[$(date)] wiki-lint stacked-pr:" >> "$LOG"
   "$STACKEDCHECK" >> "$LOG" 2>&1
 fi
 
-# Claims in wiki/status/*.md and wiki/services/*.md ("PR #99 sin mergear",
-# "<job>: pendiente") that no longer match live GitHub -- the drift that bit
+# Claims in wiki/status/*.md and wiki/services/*.md ("PR #99 not yet merged",
+# "<job>: pending") that no longer match live GitHub -- the drift that bit
 # <project-a>.md, <project-b>.md and automations.md for days to weeks in the
 # same week. Same contract and same reason it's reported, not repaired here,
 # as DRIFT and STACKED above: fixing wiki wording needs judgement about what
 # to say, not just a state flip.
 STATUSCHECK="$(cd "$(dirname "$0")" && pwd)/devbrain-wiki-status-audit"
 if "$STATUSCHECK" --quiet; then
-  STALE="sin claims desactualizados"
+  STALE="no outdated claims"
 else
-  STALE="⚠️ $("$STATUSCHECK" | sed -n 's/^wiki-status-audit: //p') claim(s) desactualizado(s)"
+  STALE="⚠️ $("$STATUSCHECK" | sed -n 's/^wiki-status-audit: //p') outdated claim(s)"
   echo "[$(date)] wiki-lint wiki-status-audit:" >> "$LOG"
   "$STATUSCHECK" >> "$LOG" 2>&1
 fi
@@ -102,4 +101,4 @@ echo "[$(date)] wiki-lint done ($LINKS · $DRIFT · $STACKED · $STALE): $SUMMAR
 # outage could go unnoticed for a week. tg_send_with_fallback tries openclaw first,
 # reaches for curl only if that fails, and tags the message when it does.
 tg_send_with_fallback "$OPENCLAW_BIN" \
-  "🧹 Lint semanal de la wiki ($LINKS · $DRIFT · $STACKED · $STALE): ${SUMMARY:-completado (ver log)}" "$LOG"
+  "🧹 Weekly wiki lint ($LINKS · $DRIFT · $STACKED · $STALE): ${SUMMARY:-done (see log)}" "$LOG"

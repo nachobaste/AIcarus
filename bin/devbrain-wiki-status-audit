@@ -92,8 +92,8 @@ Usage:
     devbrain-wiki-status-audit [--quiet]
 
 Output (TSV, one finding per line):
-    pr-estado-desactualizado\t<page>:<line>\t<owner>/<repo>#<N>\tclaim=<X>\tactual=<Y>
-    workflow-estado-desactualizado\t<page>:<line>\t<job-id> (<owner>/<repo>)\tclaim=<X>\tactual=<Y>
+    pr-state-outdated\t<page>:<line>\t<owner>/<repo>#<N>\tclaim=<X>\tactual=<Y>
+    workflow-state-outdated\t<page>:<line>\t<job-id> (<owner>/<repo>)\tclaim=<X>\tactual=<Y>
 
 Exit codes:
     0  nothing to flag
@@ -120,8 +120,8 @@ GH_BIN = os.environ.get("WIKI_STATUS_AUDIT_GH", "gh")
 # else's machine. Must be set explicitly to the account's own GitHub username.
 OWNER = os.environ.get("WIKI_STATUS_AUDIT_OWNER")
 
-FINDING_PR = "pr-estado-desactualizado"
-FINDING_WORKFLOW = "workflow-estado-desactualizado"
+FINDING_PR = "pr-state-outdated"
+FINDING_WORKFLOW = "workflow-state-outdated"
 
 # --- claim vocabularies -------------------------------------------------
 # Order matters: first pattern that matches a bullet wins (see docstring
@@ -134,7 +134,9 @@ PR_STATE_PATTERNS = [
         r"|\besperando\s+merge\b|\babiert[oa]s?\b", re.I)),
 ]
 
-WORKFLOW_MENTION_RE = re.compile(r"`([\w.\-]+)`:\s*(RESUELTO|resuelto|pendiente|activo|apagado)")
+WORKFLOW_MENTION_RE = re.compile(
+    r"`([\w.\-]+)`:\s*(RESUELTO|resuelto|resolved|RESOLVED|pendiente|activo|apagado"
+    r"|pending|active|off|disabled)")
 
 LINK_PR_RE = re.compile(
     r"\[(?:PR\s*)?#(\d+)\]\((https://github\.com/([\w.\-]+)/([\w.\-]+)/pull/(\d+))\)",
@@ -327,22 +329,23 @@ def gh_workflow_state(owner, repo, cache):
 
 
 def classify_workflow_bucket(word, bullet_text):
-    """`word` is whatever followed `` `job-id`: `` directly. "apagado" and
-    "activo"/"pendiente" are unambiguous on their own. "resuelto"/"RESUELTO"
-    is not -- a services page can document two different resolution
-    mechanisms (disabling the workflow vs. only removing its schedule
-    trigger while it stays `active` on purpose) -- so it only resolves to a
-    bucket when the REST of the same bullet also says apagado/activo/
-    pendiente elsewhere. With no such qualifier, this returns None and the
-    caller skips the claim rather than guessing."""
+    """`word` is whatever followed `` `job-id`: `` directly. "apagado"/"off"/
+    "disabled" and "activo"/"pendiente"/"active"/"pending" are unambiguous on
+    their own. "resuelto"/"RESUELTO"/"resolved" is not -- a services page can
+    document two different resolution mechanisms (disabling the workflow vs.
+    only removing its schedule trigger while it stays `active` on purpose) --
+    so it only resolves to a bucket when the REST of the same bullet also says
+    apagado/activo/pendiente (or their English equivalents) elsewhere. With no
+    such qualifier, this returns None and the caller skips the claim rather
+    than guessing."""
     word = word.lower()
-    if word == "apagado":
+    if word in ("apagado", "off", "disabled"):
         return "OFF"
-    if word in ("activo", "pendiente"):
+    if word in ("activo", "pendiente", "active", "pending"):
         return "ON"
-    if re.search(r"\bapagado\b", bullet_text, re.I):
+    if re.search(r"\bapagado\b|\boff\b|\bdisabled\b", bullet_text, re.I):
         return "OFF"
-    if re.search(r"\bactivo\b|\bpendiente\b", bullet_text, re.I):
+    if re.search(r"\bactivo\b|\bpendiente\b|\bactive\b|\bpending\b", bullet_text, re.I):
         return "ON"
     return None
 
@@ -392,19 +395,19 @@ def main(argv):
     quiet = "--quiet" in argv[1:]
 
     if not os.path.isdir(WIKI):
-        print(f"devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_WIKI no existe: {WIKI}",
+        print(f"devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_WIKI does not exist: {WIKI}",
               file=sys.stderr)
         return 2
 
     if not OWNER:
-        print("devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_OWNER no esta seteado. "
-              "Setealo a tu propio usuario de GitHub -- no hay valor por defecto.",
+        print("devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_OWNER is not set. "
+              "Set it to your own GitHub username -- there is no default.",
               file=sys.stderr)
         return 2
 
     ok, _, err = run([GH_BIN, "--version"])
     if not ok:
-        print(f"devbrain-wiki-status-audit: gh no disponible ({GH_BIN}): {err.strip()[:200]}",
+        print(f"devbrain-wiki-status-audit: gh not available ({GH_BIN}): {err.strip()[:200]}",
               file=sys.stderr)
         return 2
 

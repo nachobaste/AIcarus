@@ -66,7 +66,7 @@ epic: 2
 ...
 ```
 
-- `status` moves through `solicitado` (requested, not yet planned) →
+- `status` moves through `requested` (not yet planned) →
   `approved` → (after a run) either gone/merged, `failed`, or `paused`/`blocked`
   with a reason.
 - **`aprobado` is the one field with a hard rule attached: only

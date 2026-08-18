@@ -20,7 +20,7 @@
 # than one good one.
 #
 # Usage:
-#     devbrain-research <repo>                   # scope internas (default)
+#     devbrain-research <repo>                   # scope internas/internal (default)
 #     devbrain-research --scope internas <repo>
 #     devbrain-research --scope conexiones       # picks its own repos, multi-repo
 #     devbrain-research --scope externo          # routed, and refuses: see below
@@ -112,14 +112,14 @@ while [ $# -gt 0 ]; do
     --next-bucket) next_bucket; exit 0 ;;
     --promote) PROMOTE=1; shift ;;
     --scope) SCOPE="${2:-}"; shift 2 || true ;;
-    -*) echo "ERROR: opcion desconocida: $1"; exit 2 ;;
+    -*) echo "ERROR: unknown option: $1"; exit 2 ;;
     *) REPO="$1"; shift ;;
   esac
 done
 
 case "$SCOPE" in
   internas|conexiones|externo) ;;
-  *) echo "ERROR: scope invalido: '$SCOPE' (internas|conexiones|externo)"; exit 2 ;;
+  *) echo "ERROR: invalid scope: '$SCOPE' (internas|conexiones|externo)"; exit 2 ;;
 esac
 
 # The external bucket is ROUTED but REFUSES to run. It needs WebSearch/WebFetch,
@@ -128,8 +128,8 @@ esac
 # own discussion, not a quiet arrival inside this one. Deliberately no network
 # tool anywhere on this path.
 if [ "$SCOPE" = "externo" ]; then
-  echo "bucket externo pendiente de decision de permisos (sin acceso a red)"
-  log "externo: omitido — pendiente de decision de permisos de red"
+  echo "the externo bucket is pending a permissions decision (no network access)"
+  log "externo: skipped — pending a network-permissions decision"
   exit 0
 fi
 
@@ -138,62 +138,62 @@ fi
 # selection criteria live in lib/research_promote.py, in the open, so they can be
 # argued with — a ranking hidden in a prompt is a ranking nobody can audit.
 if [ "$PROMOTE" = "1" ]; then
-  [ -f "$BACKLOG" ] || { echo "nada que promover (no hay backlog)"; exit 0; }
+  [ -f "$BACKLOG" ] || { echo "nothing to promote (no backlog)"; exit 0; }
   SELECTED="$(mktemp)"; PROPOSALS="$(mktemp)"
   trap 'rm -f "$SELECTED" "$PROPOSALS"' EXIT
   SEL_SUMMARY="$(python3 "$ROOT/lib/research_promote.py" select < "$BACKLOG" 2>&1 >"$SELECTED")"
   log "promote: $SEL_SUMMARY"
   if [ ! -s "$SELECTED" ]; then
-    echo "nada que promover"; log "promote: nada que promover"; exit 0
+    echo "nothing to promote"; log "promote: nothing to promote"; exit 0
   fi
 
   : > "$PROPOSALS"
-  # One deep pass per finding, not one pass for all of them. "Profunda" is the whole
+  # One deep pass per finding, not one pass for all of them. "Deep" is the whole
   # point of this stage; three findings sharing one session get a third of the
   # attention each and the result reads like the backlog it came from.
-  while IFS= read -r TITULO; do
-    [ -n "$TITULO" ] || continue
-    BLOQUE="$(awk -v t="### $TITULO" '$0==t{f=1} f{print} f && /^$/ && NR>1{if(seen)exit; seen=1}' "$SELECTED")"
-    FREPO="$(printf '%s' "$BLOQUE" | sed -n 's/^- repo: //p' | head -1)"
+  while IFS= read -r TITLE; do
+    [ -n "$TITLE" ] || continue
+    BLOCK="$(awk -v t="### $TITLE" '$0==t{f=1} f{print} f && /^$/ && NR>1{if(seen)exit; seen=1}' "$SELECTED")"
+    FREPO="$(printf '%s' "$BLOCK" | sed -n 's/^- repo: //p' | head -1)"
     [ -n "$FREPO" ] || continue
     FDIR="$PROJECTS_DIR/$FREPO"
-    [ -d "$FDIR" ] || { log "promote: repo inexistente para '$TITULO'"; continue; }
+    [ -d "$FDIR" ] || { log "promote: repo does not exist for '$TITLE'"; continue; }
 
     OUT="$(mktemp)"
     {
       cat <<PROMPTP
-Sos el research shift de devbrain, en la etapa de PROFUNDIZACION.
+You are devbrain's research shift, in the DEEP-DIVE stage.
 
-Este hallazgo ya paso el filtro de citas y fue elegido para convertirse en una propuesta
-que el dueño del sistema decide en cinco minutos. Esta en el repo \`$FREPO\` ($FDIR):
+This finding already passed the citation filter and was chosen to become a proposal
+that the system's owner decides on in five minutes. It's in the \`$FREPO\` repo ($FDIR):
 
-$BLOQUE
+$BLOCK
 
-Investigá a fondo y devolvé UNA propuesta. Reglas duras:
-1. Los archivos que nombres tienen que EXISTIR. Abrilos, no los adivines.
-2. **Minimo DOS opciones reales, y tienen que tocar archivos DISTINTOS.** Dos opciones
-   sobre los mismos archivos son una sola escrita dos veces, y se descarta la propuesta
-   entera. Si de verdad solo hay un camino, decilo en 'riesgos' y dejá una sola opcion:
-   se va a descartar, y esta bien — es informacion, no relleno.
-3. No escribas 'origen': eso lo pone el sistema.
+Investigate thoroughly and return ONE proposal. Hard rules:
+1. Any files you name MUST EXIST. Open them, don't guess.
+2. **At least TWO real options, and they must touch DIFFERENT files.** Two options
+   over the same files are one option written twice, and the whole proposal gets
+   discarded. If there genuinely is only one path, say so under 'risks' and leave a
+   single option: it will get discarded, and that's fine — it's information, not filler.
+3. Don't write 'source': the system sets that.
 
-FORMATO EXACTO, sin texto alrededor:
+EXACT FORMAT, no text around it:
 
-### <titulo de la propuesta>
+### <proposal title>
 - repo: $FREPO
-- esfuerzo: <cuantas noches>
-- riesgos: <que puede salir mal>
-- verificar: <como se sabria que quedo bien>
+- effort: <how many nights>
+- risks: <what could go wrong>
+- verify: <how you'd know it came out right>
 
-#### Opcion A — <nombre corto>
-- archivos: <paths separados por coma>
-- pros: <texto>
-- contras: <texto>
+#### Option A — <short name>
+- files: <comma-separated paths>
+- pros: <text>
+- cons: <text>
 
-#### Opcion B — <nombre corto>
-- archivos: <paths separados por coma, distintos de los de A>
-- pros: <texto>
-- contras: <texto>
+#### Option B — <short name>
+- files: <comma-separated paths, different from A's>
+- pros: <text>
+- cons: <text>
 PROMPTP
     } | with_timeout 900 "$CLAUDE_BIN" -p --model opus --permission-mode plan \
           --disallowedTools "$DISALLOWED" --allowedTools "$ALLOWED_READONLY" \
@@ -202,27 +202,27 @@ PROMPTP
     # The system owns the attribution: a model that misattributes a proposal would
     # silently mark the wrong finding as promoted and the real one would come back
     # every night.
-    # --origen makes the attribution the system's, not the model's. It was shell text
+    # --source makes the attribution the system's, not the model's. It was shell text
     # munging first; `sed 0,/re/` and `\n` in a replacement are GNU-only and silently
     # did nothing on this BSD machine, so nothing marked the finding as promoted and it
     # would have come back every night. See CLAUDE.md on BSD utilities.
     VAL="$(RESEARCH_REPO_ROOT="$FDIR" python3 "$ROOT/lib/research_promote.py" \
-             validate --origen "$TITULO" < "$OUT" 2>&1 >>"$PROPOSALS" || true)"
-    log "promote '$TITULO': $VAL"
+             validate --source "$TITLE" < "$OUT" 2>&1 >>"$PROPOSALS" || true)"
+    log "promote '$TITLE': $VAL"
     case "$VAL" in
-      "propuestas: 0"*)
+      "proposals: 0"*)
         KEEPP="${RESEARCH_RAW_DIR:-$(dirname "$LOG")}/raw-promote-$(date '+%Y%m%d-%H%M%S')-$$.md"
-        cp "$OUT" "$KEEPP" 2>/dev/null && log "promote '$TITULO': cruda en $KEEPP" ;;
+        cp "$OUT" "$KEEPP" 2>/dev/null && log "promote '$TITLE': raw output in $KEEPP" ;;
     esac
     rm -f "$OUT"
   done < <(grep '^### ' "$SELECTED" | sed 's/^### //')
 
   if [ -s "$PROPOSALS" ]; then
-    { echo; echo "## Propuestas — $(date '+%Y-%m-%d')"; echo; cat "$PROPOSALS"; } >> "$BACKLOG"
-    echo "propuestas nuevas: $(grep -c '^### ' "$PROPOSALS")"
+    { echo; echo "## Proposals — $(date '+%Y-%m-%d')"; echo; cat "$PROPOSALS"; } >> "$BACKLOG"
+    echo "new proposals: $(grep -c '^### ' "$PROPOSALS")"
   else
-    echo "ninguna propuesta paso la validacion"
-    log "promote: 0 propuestas validas"
+    echo "no proposal passed validation"
+    log "promote: 0 valid proposals"
   fi
   exit 0
 fi
@@ -239,8 +239,8 @@ if [ "$SCOPE" = "conexiones" ]; then
     [ -n "$line" ] && REPOS+=("$line")
   done < <(pick_repos)
   if [ "${#REPOS[@]}" -lt 2 ]; then
-    echo "ERROR: conexiones necesita al menos 2 repos en el allowlist, hay ${#REPOS[@]}"
-    log "conexiones: abortado, ${#REPOS[@]} repo(s) disponibles"
+    echo "ERROR: conexiones needs at least 2 repos in the allowlist, there are ${#REPOS[@]}"
+    log "conexiones: aborted, ${#REPOS[@]} repo(s) available"
     exit 3
   fi
 else
@@ -271,7 +271,7 @@ for R in "${REPOS[@]}"; do
   PDIR="$PROJECTS_DIR/$R"
   if [ -f "$PDIR/devbrain-projects.allow" ]; then
     echo "ERROR: $R is the devbrain installation itself — never investigated unattended (interactive-only)."
-    echo "       Ver wiki/lessons/machine-config-nunca-nocturno.md"
+    echo "       See wiki/lessons/machine-config-nunca-nocturno.md"
     log "refused $R (is the devbrain installation itself)"
     exit 3
   fi
@@ -290,14 +290,14 @@ DIR="$PROJECTS_DIR/$REPO"
 # --- context fed to the session ----------------------------------------------
 mkdir -p "$(dirname "$BACKLOG")" "$(dirname "$LOG")"
 [ -f "$BACKLOG" ] || cat > "$BACKLOG" <<'HEADER'
-# Mejoras propuestas
+# Proposed improvements
 
-> Backlog del research shift (`devbrain-research`). Cada hallazgo cita un
-> `archivo:linea` real, verificado automaticamente antes de entrar aca — lo que no
-> resuelve se descarta y se cuenta en el log, nunca se guarda.
+> Backlog for the research shift (`devbrain-research`). Every finding cites a real
+> `file:line`, verified automatically before it lands here — whatever doesn't
+> resolve gets discarded and counted in the log, never saved.
 >
-> Esto es materia prima. Lo que llega al dueño son las 2-3 propuestas profundas que
-> produce la promocion, no esta lista.
+> This is raw material. What reaches the owner is the 2-3 deep proposals that
+> promotion produces, not this list.
 
 HEADER
 
@@ -307,11 +307,11 @@ for R in "${REPOS[@]}"; do
     STATUS_TEXT="${STATUS_TEXT}--- $R ---"$'\n'"$(cat "$WIKI/status/$R.md")"$'\n'
   fi
 done
-[ -n "$STATUS_TEXT" ] || STATUS_TEXT="(sin pagina de status)"
+[ -n "$STATUS_TEXT" ] || STATUS_TEXT="(no status page)"
 # Titles already in the backlog, so the session does not spend its run re-finding
 # what is already written down. Extracted here, not asked of the model.
 KNOWN="$(grep '^### ' "$BACKLOG" 2>/dev/null | sed 's/^### //' || true)"
-[ -n "$KNOWN" ] || KNOWN="(el backlog esta vacio)"
+[ -n "$KNOWN" ] || KNOWN="(the backlog is empty)"
 
 RAW="$(mktemp)"; trap 'rm -f "$RAW"' EXIT
 
@@ -325,82 +325,84 @@ fi
 {
 if [ "$SCOPE" = "conexiones" ]; then
   cat <<PROMPTC
-Eres el research shift de devbrain, en el bucket CONEXIONES. Estas leyendo estos repos:
+You are devbrain's research shift, in the CONEXIONES (connections) bucket. You are
+reading these repos:
 
 $REPOLIST
-Mas el wiki en $WIKI.
+Plus the wiki at $WIKI.
 
-Tu trabajo es encontrar CONEXIONES REALES entre proyectos: donde uno podria alimentar,
-simplificar o dar contexto a otro, y todavia no lo hace.
+Your job is to find REAL CONNECTIONS between projects: where one could feed,
+simplify, or give context to another, and still doesn't.
 
-Estas conexiones ya estan identificadas en el portfolio y nunca se priorizaron.
-Evaluá las que apliquen a los repos de arriba contra el CODIGO REAL — ¿siguen vigentes?
-¿cual esta mas cerca de ser posible? — y buscá ademas conexiones no listadas:
+These connections are already identified in the portfolio and were never prioritized.
+Evaluate the ones that apply to the repos above against the REAL CODE — are they still
+valid? which is closest to being possible? — and also look for unlisted connections:
 
 $SEEDS
 
-REGLAS DURAS:
-1. Cada hallazgo DEBE citar \`archivo:linea\` reales de AL MENOS DOS repos distintos. Un
-   hallazgo que cita un solo repo NO es una conexion y se descarta entero, automaticamente.
-   No adivines numeros de linea: abri el archivo y mira.
-2. Nada de obviedades de infraestructura ("ambos usan Supabase", "ambos son TypeScript").
-   Una conexion es un dato o una capacidad concreta de un repo que le serviria al otro.
-3. Cada hallazgo necesita un por-que-importa concreto, no generico.
-4. Maximo $MAX hallazgos. Preferi pocos y solidos.
-5. Si no encontras nada que cumpla estas reglas, no devuelvas nada. "Nada" es un resultado
-   legitimo; rellenar no lo es.
+HARD RULES:
+1. Every finding MUST cite real \`file:line\` references from AT LEAST TWO different
+   repos. A finding that cites only one repo is NOT a connection and gets discarded
+   entirely, automatically. Don't guess line numbers: open the file and look.
+2. No infrastructure truisms ("both use Supabase", "both are TypeScript"). A
+   connection is a concrete piece of data or capability from one repo that would
+   serve the other.
+3. Every finding needs a concrete why-it-matters, not a generic one.
+4. Maximum $MAX findings. Prefer few and solid.
+5. If you don't find anything that meets these rules, return nothing. "Nothing" is a
+   legitimate outcome; padding is not.
 
-FORMATO EXACTO por hallazgo (sin texto alrededor):
+EXACT FORMAT per finding (no text around it):
 
-### <titulo en una linea>
+### <one-line title>
 - repo: <repo-a> + <repo-b>
-- evidencia: <repo-a/archivo:linea>, <repo-b/archivo:linea>
-- porque: <una o dos lineas, concreto>
-- tamano: <cuantas noches de trabajo>
+- evidence: <repo-a/file:line>, <repo-b/file:line>
+- why: <one or two lines, concrete>
+- size: <how many nights of work>
 
-OJO con las rutas de evidencia: escribilas relativas a la raiz del repo que corresponda.
+Watch the evidence paths: write them relative to whichever repo's own root they belong to.
 
-Ya estan anotados estos hallazgos, NO los repitas:
+These findings are already noted, do NOT repeat them:
 $KNOWN
 
-Status boards actuales:
+Current status boards:
 $STATUS_TEXT
 PROMPTC
 else
   cat <<PROMPT
-Eres el research shift de devbrain. Estas leyendo el repo \`$REPO\` en \`$DIR\`.
+You are devbrain's research shift. You are reading the \`$REPO\` repo at \`$DIR\`.
 
-Tu trabajo es encontrar BRECHAS INTERNAS reales y verificables:
-- que esta prometido en docs/wiki y no esta construido
-- que esta construido y no esta documentado
-- que dice el status board que ya no es cierto
-- deuda tecnica ya señalada y todavia sin resolver
+Your job is to find real, verifiable INTERNAL GAPS:
+- what's promised in docs/wiki and isn't built
+- what's built and isn't documented
+- what the status board says that is no longer true
+- technical debt already flagged and still unresolved
 
-REGLAS DURAS:
-1. Cada hallazgo DEBE citar al menos un \`archivo:linea\` real de este repo. Una cita
-   que no resuelva hace que el hallazgo se descarte entero. No adivines numeros de
-   linea: abri el archivo y mira.
-2. No propongas construir cosas que ya existen. En particular ya existen
-   \`devbrain-drift\` (drift entre almacenes de conocimiento), \`wiki-linkcheck\`
-   (enlaces de la wiki) y \`notion-sync-check\`. Si detectas algo que esas cubren,
-   citalas en vez de proponer construirlas.
-3. Maximo $MAX hallazgos. Preferi pocos y solidos: uno inventado cuesta mas que diez
-   que no encontraste.
-4. Si no encontras nada que cumpla estas reglas, no devuelvas nada. "Nada" es un
-   resultado legitimo; rellenar no lo es.
+HARD RULES:
+1. Every finding MUST cite at least one real \`file:line\` from this repo. A citation
+   that doesn't resolve discards the whole finding. Don't guess line numbers: open
+   the file and look.
+2. Don't propose building things that already exist. In particular,
+   \`devbrain-drift\` (drift between knowledge stores), \`wiki-linkcheck\`
+   (wiki links), and \`notion-sync-check\` already exist. If you spot something
+   those cover, cite them instead of proposing to build them.
+3. Maximum $MAX findings. Prefer few and solid: one invented finding costs more
+   than ten you didn't find.
+4. If you don't find anything that meets these rules, return nothing. "Nothing" is
+   a legitimate outcome; padding is not.
 
-FORMATO EXACTO por hallazgo (sin texto alrededor):
+EXACT FORMAT per finding (no text around it):
 
-### <titulo en una linea>
+### <one-line title>
 - repo: $REPO
-- evidencia: <archivo:linea>
-- porque: <una o dos lineas>
-- tamano: <cuantas noches de trabajo>
+- evidence: <file:line>
+- why: <one or two lines>
+- size: <how many nights of work>
 
-Ya estan anotados estos hallazgos, NO los repitas:
+These findings are already noted, do NOT repeat them:
 $KNOWN
 
-Status board actual del repo:
+Current status board for this repo:
 $STATUS_TEXT
 PROMPT
 fi
@@ -410,8 +412,8 @@ fi
       > "$RAW" 2>>"$LOG"
 RC=$?
 if [ $RC -ne 0 ]; then
-  log "$REPO: la sesion de research fallo (rc=$RC)"
-  echo "ERROR: la sesion de research fallo (rc=$RC) — ver $LOG"
+  log "$REPO: the research session failed (rc=$RC)"
+  echo "ERROR: the research session failed (rc=$RC) — see $LOG"
   exit 0   # a failed research run must never take down the night
 fi
 
@@ -434,7 +436,7 @@ echo "$LABEL: $SUMMARY"
 if [ -s "$FILTERED" ]; then
   { echo; echo "## $(date '+%Y-%m-%d') — $LABEL"; echo; cat "$FILTERED"; } >> "$BACKLOG"
 else
-  log "$REPO: nada nuevo que anotar"
+  log "$REPO: nothing new to note"
 fi
 
 # If the run produced findings and the filter rejected every one of them, keep the
@@ -444,5 +446,5 @@ fi
 # evidence was already deleted.
 if [ ! -s "$FILTERED" ] && grep -q '^### ' "$RAW" 2>/dev/null; then
   KEEP="${RESEARCH_RAW_DIR:-$(dirname "$LOG")}/raw-$REPO-$(date '+%Y%m%d-%H%M%S').md"
-  cp "$RAW" "$KEEP" 2>/dev/null && log "$REPO: se descarto todo — salida cruda en $KEEP"
+  cp "$RAW" "$KEEP" 2>/dev/null && log "$REPO: everything was discarded — raw output in $KEEP"
 fi
