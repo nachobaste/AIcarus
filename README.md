@@ -95,10 +95,15 @@ This is the one piece of the design that isn't a suggestion:
 4. **You merge, or you don't.** From the GitHub app, from the CLI, whenever you
    get to it. If something's wrong, you close the PR and tell the queue why.
 
-The only place that's allowed to approve a queue item for unattended nightly
-execution is `bin/devbrain-interview` — a weekly, interactive, human-present
-session. Nothing else writes the `aprobado:` (approved) key that the nightly
-runner (`bin/devbrain-night`) requires before it will touch a repo.
+Three paths can write the `aprobado:` (approved) key into a queue plan —
+`bin/devbrain-interview` (weekly planning), `bin/devbrain-day` (the daily
+shift ritual), and `bin/devbrain-queue dale <n>` (a reply to the morning
+digest, e.g. from a chat bot). All three require a human to make the call
+on that specific plan in the moment; none of them run unattended. The
+actual gate against unattended self-approval lives in `bin/devbrain-night`:
+its `next_plan()` refuses any plan that lacks both `status: approved` and
+a non-empty `aprobado:` — so nothing reaches the nightly runner without
+both markers set by a human.
 
 ## What's in this repo
 

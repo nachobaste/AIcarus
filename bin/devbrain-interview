@@ -1,6 +1,10 @@
 #!/bin/bash
 # devbrain-interview — weekly planning session (INTERACTIVE, you at the keyboard).
-# The ONLY component allowed to write the `aprobado:` (approved) key into queue plans.
+# One of several human-present paths that write the `aprobado:` (approved) key
+# into queue plans (also lib/day.sh's day_apply(), reachable from devbrain-day
+# and devbrain-queue dale <n>). What actually gates unattended execution is
+# devbrain-night's next_plan(), which refuses any plan lacking BOTH
+# status: approved AND a non-empty `aprobado:`.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"

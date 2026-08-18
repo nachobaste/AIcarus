@@ -1,8 +1,10 @@
 #!/bin/bash
 # devbrain-queue — deterministic manager of ~/dev/queue. NO model calls.
-# Telegram-safe: the LLM router forwards "add X to the queue" here. Approval happens
-# ONLY in devbrain-interview (it writes the 'aprobado:' key); the night runner refuses
-# without it.
+# Telegram-safe: the LLM router forwards "add X to the queue" here. 'aprobado:' is
+# written by devbrain-interview, devbrain-day, and this file's own 'dale <n>'
+# (day_apply) — all three require a human present in the moment, never
+# unattended. The night runner refuses without it: devbrain-night's next_plan()
+# requires status: approved AND a non-empty aprobado:.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"
