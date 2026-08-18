@@ -69,12 +69,16 @@ epic: 2
 - `status` moves through `requested` (not yet planned) →
   `approved` → (after a run) either gone/merged, `failed`, or `paused`/`blocked`
   with a reason.
-- **`aprobado` is the one field with a hard rule attached: only
-  `bin/devbrain-interview` — a weekly, interactive, human-present session — is
-  allowed to write it.** `bin/devbrain-night` refuses to touch any plan that
-  doesn't have both `status: approved` and a non-empty `aprobado:` date. This is
-  the actual mechanism behind "nothing runs unattended unless a human explicitly
-  approved it" — not a convention, a field the nightly runner checks.
+- **`aprobado` is the one field with a hard rule attached: every path that
+  writes it is human-present** — `lib/day.sh`'s `day_apply()`, reachable from
+  `bin/devbrain-day` (the daily shift ritual) and `bin/devbrain-queue dale <n>`
+  (a reply to the morning digest), plus `bin/devbrain-interview` (weekly
+  planning), which instructs a model to write it rather than writing it
+  itself. **None of them run unattended.** `bin/devbrain-night` refuses to
+  touch any plan that doesn't have both `status: approved` and a non-empty
+  `aprobado:` date. This is the actual mechanism behind "nothing runs
+  unattended unless a human explicitly approved it" — not a convention, a
+  field the nightly runner checks.
 - No database: `git log -- ~/dev/queue/` on that directory is a complete,
   ordered audit trail of every task ever proposed, approved, or rejected, and
   why (see `bin/devbrain-queue`'s `no <n> "<reason>"` path — rejections require
