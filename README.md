@@ -128,6 +128,12 @@ setup.sh                       interactive first-run wizard
 
 ## Getting started
 
+**Never run anything like this before, or want a coding agent to walk you through it
+step by step with explicit go/no-go checkpoints?** Use
+[`docs/GUIDED-SETUP.md`](docs/GUIDED-SETUP.md) instead — a phased bring-up (machine
+hygiene, then memory, then the propose-only loop, then autonomy) written for that.
+The steps below assume you're comfortable enough to adapt them yourself.
+
 1. Clone this repo to `~/dev/devbrain` (recommended — a handful of scripts
    default to this exact path for config files they read from a *different*
    process than the one invoking them, where auto-detecting "wherever you put
