@@ -15,13 +15,13 @@ out to `gh`/`git`) gluing together a small number of external things:
 
 | Tool | Role | Swappable? |
 |---|---|---|
-| [Claude Code](https://claude.com/claude-code) | The coding agent — the thing that reads a repo, writes code, runs tests, opens a PR (`bin/devbrain`) | Yes — any non-interactively-invokable coding agent works, as long as it can be constrained to a branch |
+| [Claude Code](https://claude.com/claude-code) | The coding agent — the thing that reads a repo, writes code, runs tests, opens a PR (`bin/devbrain`) | Yes — any non-interactively invokable coding agent works, as long as it can be constrained to a branch |
 | [OpenClaw](https://github.com/openclaw/openclaw) | The reference Telegram bridge (`openclaw/`) | Yes — the most swappable piece; anything that turns a chat message into a shell command and back works |
 | Moonshot Kimi K2 (API) / [Ollama](https://ollama.com) (local) | The cheap LLM router that talks to you day-to-day | Yes — a config value (`DEVBRAIN_LLM_ROUTER` in `devbrain.local.env`), not hardcoded |
 | `gh` (GitHub CLI) | Opens PRs, reads PR/issue state for the audit scripts | Not really — several scripts shell out to it directly; a different forge would mean rewriting those |
 | `git` | Branching, the propose-only workflow's actual mechanism | No |
 | Notion API (`bin/notion-*`) | Optional mirror of the queue/wiki into a Notion workspace | Entirely optional — ignore it if you don't use Notion |
-| bash 3.2 + python3 | The scripting substrate | Not swappable, but see "Portability" below for what that constrains |
+| bash 3.2 + python3 | The scripting substrate | Not swappable, but see "Portability" later in this document for what that constrains |
 
 ## The propose-only workflow, mechanically
 
@@ -104,7 +104,7 @@ file's own header comment" shape) rather than inventing a different mechanism.
 ## The four-tier data classification (`lib/classify.sh`)
 
 `personal | business-confidential | interno-devbrain | publico` (public). Every
-path gets classified by `classify_tier()`, and **unknown paths fail CLOSED to
+path gets classified by `classify_tier()`, and **unknown paths fail closed to
 `business-confidential`** — a brand-new directory nobody has classified yet
 must not leak by default just because nobody got around to labeling it.
 `assert_egress_ok <tier> <destination>` is the single gate every script that
@@ -158,7 +158,7 @@ eight nights in a row — not broken, just idle, because nothing generates
 candidate work between weekly interviews. `devbrain-research` is the fix: a
 read-only research shift (no `Write`, no `Edit`, no MCP tools available to that
 session — it *cannot* touch code even if it wanted to) that spends a rotating
-attention budget (internal gaps / cross-project links / external exploration)
+attention budget (internal gaps, cross-project links, and external exploration)
 investigating and writing up findings, which `devbrain-day` then turns into
 queue proposals for you to decide on the next day-shift — never approved for
 unattended execution by this path; only `devbrain-interview` can do that.
@@ -198,7 +198,7 @@ defaults in place — that keeps your fork diffable against upstream.
 
 macOS ships bash 3.2 as `/bin/bash`, and a script's `#!/bin/bash` shebang execs
 that directly regardless of what's on `$PATH` — a contributor with a newer bash
-installed via Homebrew won't be protected from this if they write a script that
+installed using Homebrew won't be protected from this if they write a script that
 only works on bash 4+. Concretely, this repo avoids: `declare -A` (associative
 arrays — see the case-statement-based tier tally as the alternative pattern),
 `wait -n`, `${var,,}` case-folding, and `mapfile`. `lib/queue.sh`'s

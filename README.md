@@ -1,7 +1,7 @@
 # AIcarus — a Telegram-driven, propose-only dev automation starter kit
 
 AIcarus (internally, the tooling still goes by its original name, "devbrain" — you'll
-see `devbrain-*` throughout the scripts and docs below) lets you chat with your own
+see `devbrain-*` throughout the scripts and docs in this repo) lets you chat with your own
 projects over Telegram, have a cheap LLM turn
 that chat into queued work items, and have a more capable coding agent pick up
 *approved* items overnight — always on a feature branch, always as a pull request,
@@ -56,7 +56,7 @@ Five moving parts:
    "add a dark mode toggle to the settings page" into a queued work item, answers
    quick questions, nags you about a stale proposal. It should be cheap — it's
    running constantly and doing very little real reasoning. The reference setup
-   uses Moonshot's Kimi K2 via API, with a local [Ollama](https://ollama.com)
+   uses Moonshot's Kimi K2 over its API, with a local [Ollama](https://ollama.com)
    model as a self-hosted fallback. Both are documented as validated options in
    `setup.sh`; anything else is on you to wire up (it's a config value, not a
    hardcoded assumption).
@@ -79,7 +79,7 @@ Five moving parts:
    by the coding agent at the end of each task and read by it at the start of the
    next one, plus read in full during the weekly interview. `docs/wiki-example/`
    in this repo shows the convention with a few generic example lessons — it's not
-   itself the wiki, just a sample of the shape one should take.
+   itself the wiki, just a sample of the shape one takes.
 
 ## The propose-only workflow (the part that isn't optional)
 
@@ -98,7 +98,7 @@ This is the one piece of the design that isn't a suggestion:
 Three paths can write the `aprobado:` (approved) key into a queue plan —
 `bin/devbrain-interview` (weekly planning), `bin/devbrain-day` (the daily
 shift ritual), and `bin/devbrain-queue dale <n>` (a reply to the morning
-digest, e.g. from a chat bot). All three require a human to make the call
+digest, for example, from a chat bot). All three require a human to make the call
 on that specific plan in the moment; none of them run unattended. The
 actual gate against unattended self-approval lives in `bin/devbrain-night`:
 its `next_plan()` refuses any plan that lacks both `status: approved` and
@@ -132,7 +132,7 @@ setup.sh                       interactive first-run wizard
 step by step with explicit go/no-go checkpoints?** Use
 [`docs/GUIDED-SETUP.md`](docs/GUIDED-SETUP.md) instead — a phased bring-up (machine
 hygiene, then memory, then the propose-only loop, then autonomy) written for that.
-The steps below assume you're comfortable enough to adapt them yourself.
+The following steps assume you're comfortable enough to adapt them yourself.
 
 1. Clone this repo to `~/dev/devbrain` (recommended — a handful of scripts
    default to this exact path for config files they read from a *different*
@@ -147,11 +147,11 @@ The steps below assume you're comfortable enough to adapt them yourself.
    bridge itself, wiring up launchd/cron for `devbrain-night`/`devbrain-digest`/
    `devbrain-heartbeat`, and running `gh auth login` are manual steps by design;
    this repo doesn't script your OS's service manager for you.
-4. Run `tests/*.sh` to sanity-check the pieces you'll actually rely on
+4. Run `tests/*.sh` to check the pieces you'll actually rely on
    (`tests/test-lib.sh`, `tests/test-queue.sh`, `tests/test-devbrain-guardrails.sh`
    are a good place to start).
 
-## What's intentionally NOT in this starter kit
+## What's intentionally not in this starter kit
 
 A few things from the reference system were dropped rather than genericized,
 because they were either too bespoke to be useful as a template or squarely
@@ -165,10 +165,10 @@ personal-data territory:
   something similar, `sentry-cli` (see the `sentry-cli` Claude Code skill, if
   you have it installed) plus a small wrapper script is the way to go.
 - **Personal read-only digests** (email/calendar/tasks briefings). These touch
-  real personal data and are exactly the kind of thing you should NOT copy
+  real personal data and are exactly the kind of thing you should *not* copy
   from someone else's config — build your own, and keep it read-only, "read
   live, answer, forget," never persisted to disk or the wiki.
-- **Notion sync.** Included (`bin/notion-sync*`), but it's OPTIONAL — a
+- **Notion sync.** Included (`bin/notion-sync*`), but it's *optional* — a
   nice-to-have mirror of the queue/wiki into a Notion workspace, not something
   devbrain needs to function. Ignore it if you don't use Notion.
 
@@ -191,5 +191,5 @@ No attribution required beyond what MIT already asks for.
 Found a bug, a genericization gap (something that still assumes one specific
 setup), or want to add a swappable piece (another messaging bridge, another LLM
 router)? See [`CONTRIBUTING.md`](CONTRIBUTING.md). For the deeper "why does this
-work this way" behind the five moving parts above, see
+work this way" behind the five moving parts described earlier, see
 [`docs/CONCEPTS.md`](docs/CONCEPTS.md).

@@ -31,16 +31,16 @@ disposes (merge).
 
 ## Prerequisites (yours to get, before any of this starts)
 
-Nothing below works without these:
+Nothing that follows works without these:
 
 1. **A machine that can stay on overnight** (Mac or Linux). Ideally dedicated to this.
 2. **A Claude subscription with a usage plan that covers agentic coding sessions**
-   (e.g. Claude Max) — this is what makes overnight execution cost **$0 marginal**:
+   (for example, Claude Max) — this is what makes overnight execution cost **$0 marginal**:
    the quota you already pay for does the work at night, instead of metering every
    session against a pay-per-token API. Skip this and every run bills you separately.
 3. **Your own GitHub account**, plus the `gh` CLI.
 4. **(Optional, for the phone layer)** an API key for a cheap chat-capable model, and
-   a messaging bot (e.g. Telegram's free `@BotFather`). This is Phase 5 — optional.
+   a messaging bot (for example, Telegram's free `@BotFather`). This is Phase 5 — optional.
 5. Homebrew (or your platform's package manager) installed.
 
 ---
@@ -58,7 +58,7 @@ Nothing below works without these:
     projects/       <- each real project, its own private repo
     wiki/           <- the system's memory (see Phase 1)
     queue/          <- the nightly task queue (see Phase 3)
-    personal/       <- tier-2 personal data, NEVER committed (see Phase 1)
+    personal/       <- tier-2 personal data, never committed (see Phase 1)
     machine-config/ <- the system's own scripts, its own private repo
     archive/        <- retired work
   ```
@@ -141,7 +141,7 @@ approved.
 - [ ] Scheduling: launchd (macOS) or cron/systemd (Linux) for the nightly run, a
       morning digest, and a periodic heartbeat.
 
-**Don't move on until:** a toy overnight run (2 tasks) produces 2 real PRs plus a
+**Don't move on until:** a toy overnight run (two tasks) produces two real PRs plus a
 correct digest.
 
 ---
@@ -153,7 +153,7 @@ correct digest.
 This repo's `bin/devbrain` already wires this in: after execute, before the PR opens,
 a second agent session — read-only, MCP denied — reviews the diff adversarially for
 bugs, regressions, secret leaks, and scope creep, and posts a verdict
-(`APPROVE` / `NOTES` / `REJECT`) at the top of the PR body. If the reviewer itself
+(`APPROVE`, `NOTES`, or `REJECT`) at the top of the PR body. If the reviewer itself
 fails or times out, the PR is still created, flagged unreviewed — the work is never
 silently dropped.
 
