@@ -57,6 +57,26 @@ day_apply() { # <title> dale|no [reason] [option A|B] -> writes/commits, prints 
         printf '%s\n' "$body"
       } > "$f"
 
+      # Gate: a plan that cannot run does not enter the queue. Same check the scheduled
+      # preflight runs before the night, but now, with you present, instead of at 23:00
+      # when the night is already lost. It fails CLOSED: if the check is missing or does
+      # not run, the plan is not approved. DAY_PREFLIGHT_BIN exists so tests never look at
+      # real checkouts.
+      local pf pf_out pf_rc
+      pf="${DAY_PREFLIGHT_BIN:-$(cd "$(dirname "$DAY_ENGINE")/.." && pwd)/bin/devbrain-preflight}"
+      if [ ! -x "$pf" ]; then
+        rm -f "$f"
+        echo "day_apply: preflight check not found at $pf — nothing gets approved without it" >&2
+        return 6
+      fi
+      pf_out="$("$pf" --plan "$f" 2>&1)"; pf_rc=$?
+      if [ "$pf_rc" -ne 0 ]; then
+        rm -f "$f"
+        echo "day_apply: '$title' was NOT approved: it could not run tonight. Fix this first:" >&2
+        printf '%s\n' "$pf_out" >&2
+        return 7
+      fi
+
       local newbacklog
       newbacklog="$(python3 "$DAY_ENGINE" mark "$title" dale < "$backlog")" || {
         echo "day_apply: the plan was written but the backlog could NOT be marked — check by hand: $backlog" >&2

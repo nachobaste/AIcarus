@@ -18,7 +18,7 @@ source "$ROOT_LIB/queue.sh"      # fm_get (reading status: blocked)
 # tools — otherwise `export PATH=...` two lines up defeats a PATH-prepend trick,
 # and a test that forgets this reaches the real messaging bridge and sends a live
 # Telegram digest.
-CLAUDE_BIN="${DEVBRAIN_DIGEST_CLAUDE_BIN:-claude}"
+CLAUDE_BIN="${DEVBRAIN_DIGEST_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
 OPENCLAW_BIN="${DEVBRAIN_DIGEST_OPENCLAW_BIN:-openclaw}"
 GH_BIN="${DEVBRAIN_DIGEST_GH_BIN:-gh}"
 PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"

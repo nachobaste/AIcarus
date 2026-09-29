@@ -62,6 +62,12 @@ export DEVBRAIN_QUEUE_DIR="$QUEUE_DIR" DEVBRAIN_WIKI_DIR="$WIKI_DIR" RESEARCH_AL
 export DAY_ENGINE="$DIR/lib/day_engine.py"   # this worktree's engine, not the machine's real default
 source "$DIR/lib/queue.sh"
 source "$DIR/lib/day.sh"
+# The gate must not look at the machine's real checkouts from a test: stubs stand in for
+# devbrain-preflight. The stub that says "no" is what proves the gate can refuse.
+printf '#!/bin/bash\nexit 0\n' > "$TMP/pf-ok"
+printf '#!/bin/bash\necho "  ✗ demo: node_modules missing in frontend/"\nexit 1\n' > "$TMP/pf-bad"
+chmod +x "$TMP/pf-ok" "$TMP/pf-bad"
+export DAY_PREFLIGHT_BIN="$TMP/pf-ok"
 
 # ---- dale: writes an approved plan file and marks the backlog ----------------
 day_apply "Fix the deploy retry" dale > "$TMP/out1" 2>&1; RC=$?
@@ -149,5 +155,39 @@ F2=$(ls "$QUEUE_DIR"/*--choose-option-b.plan.md 2>/dev/null | head -1)
 grep -q "src/two.js" "$F2" || fail "option B's files are missing from the plan body"
 grep -q "src/one.js" "$F2" && fail "option A's files leaked in when B was explicitly chosen"
 echo "OK: day_apply honours an explicit option letter, not just the default"
+
+# ---- gate: a plan that cannot run does NOT enter the queue ---------------------
+cat >> "$BACKLOG" <<'EOF'
+
+## Proposals — 2026-09-29
+### Plan that cannot run
+- source: The deploy loses its second attempt
+- repo: demo
+- effort: 1 night
+- risks: x
+- verify: y
+
+#### Option A
+- files: src/one.js
+EOF
+git -C "$WIKI_DIR" add -A && git -C "$WIKI_DIR" commit -qm "seed gate"
+BEFORE_FILES=$(ls "$QUEUE_DIR"/*.plan.md | wc -l | tr -d ' ')
+QUEUE_HEAD=$(git -C "$QUEUE_DIR" rev-parse HEAD)
+DAY_PREFLIGHT_BIN="$TMP/pf-bad" day_apply "Plan that cannot run" dale > "$TMP/out5" 2>&1; RC=$?
+[ "$RC" -eq 7 ] || fail "the gate must refuse with rc 7 when preflight says no, got $RC: $(cat "$TMP/out5")"
+grep -q "node_modules missing" "$TMP/out5" || fail "the refusal does not say what is missing: $(cat "$TMP/out5")"
+[ "$(ls "$QUEUE_DIR"/*.plan.md | wc -l | tr -d ' ')" = "$BEFORE_FILES" ] || fail "a refused plan was left in the queue"
+[ "$(git -C "$QUEUE_DIR" rev-parse HEAD)" = "$QUEUE_HEAD" ] || fail "a refused plan was committed to the queue"
+grep -A6 "### Plan that cannot run" "$BACKLOG" | grep -q "decision:" && fail "a refused plan was marked decided in the backlog"
+echo "OK: the gate refuses a plan that cannot run: nothing written, nothing committed, backlog untouched"
+
+DAY_PREFLIGHT_BIN="$TMP/does-not-exist" day_apply "Plan that cannot run" dale > "$TMP/out6" 2>&1; RC=$?
+[ "$RC" -eq 6 ] || fail "with no preflight binary the gate must fail CLOSED (rc 6), got $RC"
+[ "$(ls "$QUEUE_DIR"/*.plan.md | wc -l | tr -d ' ')" = "$BEFORE_FILES" ] || fail "a plan was approved without any preflight"
+echo "OK: the gate fails closed when the preflight check is missing"
+
+day_apply "Plan that cannot run" dale > "$TMP/out7" 2>&1; RC=$?
+[ "$RC" -eq 0 ] || fail "once preflight says yes the same proposal must be approvable, got $RC: $(cat "$TMP/out7")"
+echo "OK: the same proposal is approved once the check passes"
 
 echo "PASS: day-sh"

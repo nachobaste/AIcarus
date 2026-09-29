@@ -2,10 +2,20 @@
 # devbrain — the ONLY command the Telegram-facing agent is allowed to execute.
 # Two modes: plan (propose only, touches nothing) and execute (branch -> PR).
 # Design: see README.md (propose-only loop). Version-controlled alongside this repo.
-# Model split: a cheaper/faster model for planning, a stronger one for execution is
-# one reasonable choice — adjust --model below to whatever split fits your budget.
+# Model split: a stronger model plans and reviews (judgment), another one executes.
+# Override with DEVBRAIN_PLAN_MODEL / DEVBRAIN_EXEC_MODEL and the matching *_EFFORT.
+# Pin exact model IDs, not the "opus"/"sonnet" aliases: an alias resolves to whatever
+# the family's current default is, and a new release can change it under you.
 set -euo pipefail
 
+# Resolve the claude binary BEFORE narrowing PATH. The narrow PATH below is deliberate
+# (an unattended agent should not inherit your whole environment), but the installer
+# puts `claude` in ~/.local/bin, which is not on it: a bare `claude` is "command not
+# found" (rc=127) on every unattended run while the log looks normal. Fall back to the
+# installer's location when the interactive PATH does not have it either (launchd/cron).
+CLAUDE_BIN="${DEVBRAIN_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
+PLAN_MODEL="${DEVBRAIN_PLAN_MODEL:-claude-opus-5-5}";    PLAN_EFFORT="${DEVBRAIN_PLAN_EFFORT:-high}"
+EXEC_MODEL="${DEVBRAIN_EXEC_MODEL:-claude-sonnet-5-5}";  EXEC_EFFORT="${DEVBRAIN_EXEC_EFFORT:-medium}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
 HOUSE_RULES="${DEVBRAIN_HOUSE_RULES:-$HOME/dev/CLAUDE.md}"
@@ -45,6 +55,7 @@ verify_tools_for() {
   # `printf '%s\n'` (not '%s'): without the trailing newline `read` drops the LAST
   # field, so a repo declaring two commands would silently get only the first.
   # Caught by tests/test-devbrain-verify-commands.sh, not by reading this code.
+  local wrapper_emitted=0
   printf '%s\n' "$raw" | tr ',' '\n' | while read -r entry; do
     entry="$(printf '%s' "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [ -z "$entry" ] && continue
@@ -68,7 +79,15 @@ verify_tools_for() {
           ;;
       esac
       [ -z "$subdir" ] && { echo "verify_tools_for: '@' with no subdir for '$project' in '$entry' (entry ignored)" >&2; continue; }
-      printf ',Bash(cd %s && %s)' "$subdir" "$cmd"
+      # Not `Bash(cd <subdir> && <cmd>)`: that literal breaks on the second call of a
+      # session, because the Bash tool keeps its working directory between calls (the
+      # second `cd frontend && ...` fails, the session retries the bare command, and the
+      # bare command is not granted). One grant for bin/devbrain-verify-run instead: it
+      # does the cd itself and runs only what the verify file declares with @subdir.
+      if [ "$wrapper_emitted" -eq 0 ]; then
+        printf ',Bash(%s/bin/devbrain-verify-run %s:*)' "$ROOT" "$project"
+        wrapper_emitted=1
+      fi
     else
       printf ',Bash(%s)' "$entry"
     fi
@@ -135,6 +154,10 @@ if ! grep -qxF ".devbrain/" .gitignore 2>/dev/null; then
   git add .gitignore && git commit -q -m "chore: ignore .devbrain scratch dir" || true
 fi
 
+case "$MODE" in plan|execute)
+  [ -x "$CLAUDE_BIN" ] || { echo "devbrain: claude binary not found or not executable at $CLAUDE_BIN (set DEVBRAIN_CLAUDE_BIN)" >&2; exit 1; } ;;
+esac
+
 case "$MODE" in
 # --- PLAN: read-only, produces a short plan -------------------------------------
 plan)
@@ -153,7 +176,7 @@ plan)
     printf 'Explore the code as needed and produce a SHORT PLAN (max ~150 words, list format) for a guided beginner:\n'
     printf '1) which files you will touch, 2) what changes, 3) risks, 4) how to verify it.\n'
     printf 'Do NOT modify anything. Respond ONLY with the plan.\n'
-  } | with_timeout 900 claude -p --model opus --permission-mode plan \
+  } | with_timeout 900 "$CLAUDE_BIN" -p --model "$PLAN_MODEL" --effort "$PLAN_EFFORT" --permission-mode plan \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)" \
     --allowedTools "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(rg:*)" \
     | tee .devbrain/plan-latest.md
@@ -222,8 +245,9 @@ execute)
     printf 'BEFORE working, read every page under ~/dev/wiki/status/ (context on other projects).\n'
     printf 'WHEN DONE, update ~/dev/wiki/status/%s.md following that directory'"'"'s template.\n' "$PROJECT"
     printf 'Do NOT push, do NOT touch main, do NOT deploy. At the end, reply with a short summary of what you did.\n'
+    printf 'Verification inside a subdirectory (e.g. "npm run build" in frontend/): run `%s/bin/devbrain-verify-run %s <command>` as ONE Bash call with nothing else on the line (no cd, &&, ;, echo, bash -c, or extra arguments). That script does the cd itself, so it works no matter which directory your shell is in and can be called several times in a row. Example: `%s/bin/devbrain-verify-run %s npm run build`. A command not declared for this repo is rejected; if you need it, write it to .devbrain/blocked-by.txt as described next.\n' "$ROOT" "$PROJECT" "$ROOT" "$PROJECT"
     printf 'If you need to run a verification command (build/lint/test/typecheck) and permission denies it, do NOT retry another way and do NOT skip it silently: write the EXACT command you needed into .devbrain/blocked-by.txt (one line, the command exactly as you tried it) and stop your verification there — keep implementing the rest of the plan normally. A human decides whether to grant that permission.\n'
-  } | with_timeout 2700 claude -p --model sonnet --permission-mode acceptEdits \
+  } | with_timeout 2700 "$CLAUDE_BIN" -p --model "$EXEC_MODEL" --effort "$EXEC_EFFORT" --permission-mode acceptEdits \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)${EXTRA_DISALLOWED}" \
     --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(npm test:*),Bash(node test.js),Bash(npx tsc:*),Bash(ls:*),Bash(mkdir:*)$(verify_tools_for "$PROJECT")"
 
@@ -266,7 +290,7 @@ execute)
     printf 'Answer briefly, so a guided beginner can follow it.\n'
     printf 'The FIRST line must be EXACTLY one of: "VERDICT: APPROVE" | "VERDICT: CONCERNS" | "VERDICT: REJECT".\n'
     printf 'Then, at most 6 bullet points with concrete findings (file:line where relevant). If it is clean, say so clearly.\n'
-  } | with_timeout 900 claude -p --model opus --permission-mode plan \
+  } | with_timeout 900 "$CLAUDE_BIN" -p --model "$PLAN_MODEL" --effort "$PLAN_EFFORT" --permission-mode plan \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)" \
     --allowedTools "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(ls:*),Bash(rg:*)" \
     > "$REVIEW_FILE" 2>/dev/null || true

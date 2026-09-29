@@ -84,6 +84,25 @@ epic: 2
   why (see `bin/devbrain-queue`'s `no <n> "<reason>"` path — rejections require
   a reason, not just a discard).
 
+## Verification that can actually run
+
+An unattended session verifies its own work with the commands you declared in
+`devbrain-verify.commands`. Three pieces make sure those commands *work*, not just exist:
+
+- **`bin/devbrain-verify-run`** — for commands declared with `@subdir`. The session gets
+  one permission for it instead of one `cd <subdir> && <cmd>` literal per command,
+  because the Bash tool keeps its working directory between calls and the second
+  literal fails. The script does the `cd`, runs only what the file declares, uses no
+  shell, and refuses a subdir that is absolute, contains `..`, or escapes through a symlink.
+- **`bin/devbrain-preflight`** — run it a few hours before the night. It checks the
+  approved plans against the checkout state and, through `devbrain-verify-run --check`,
+  that every granted command is *usable*: subdir present, declared dependencies
+  installed, script defined. It also flags plans that ask for what is never granted
+  unattended (`npm install`, cloning a repo).
+- **The day-shift gate** — `day_apply` and the interview run `devbrain-preflight --plan`
+  before writing `aprobado:`. A plan that cannot run is refused while you are present.
+  See `docs/wiki-example/lessons/a-permission-that-exists-is-not-a-permission-that-works.md`.
+
 ## The "deliberate act" config-file convention
 
 Six plain-text files at the repo root — `devbrain-projects.allow`,

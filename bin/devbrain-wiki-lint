@@ -25,7 +25,8 @@ LINKCHECK="$(cd "$(dirname "$0")" && pwd)/wiki-linkcheck"
 BROKEN="$("$LINKCHECK" "$WIKI" 2>&1)"
 echo "[$(date)] wiki-lint linkcheck: $(printf '%s' "$BROKEN" | head -2 | tr '\n' ' ')" >> "$LOG"
 
-SUMMARY=$(claude -p --permission-mode acceptEdits \
+CLAUDE_BIN="${DEVBRAIN_WIKI_LINT_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
+SUMMARY=$("$CLAUDE_BIN" -p --permission-mode acceptEdits \
   --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*)" \
   "You are the maintainer of this wiki (~/dev/wiki). Read SCHEMA.md for the rules. Do a LINT:
 1) Look for contradictions between pages, stale data, and orphaned pages (no links to them).

@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""devbrain-preflight — check, BEFORE the night, that the approved plans can run.
+
+WHY THIS EXISTS
+An unattended night is the most expensive place to discover that a plan cannot run:
+a `blocked` plan is not retried by itself, so each one costs a whole day. Most of what
+blocks a plan can be seen in seconds, from files on disk, hours before the runner starts.
+
+WHAT IT LOOKS AT, and each check comes from a real failure
+  1. This checkout is up to date with origin. The runner reads permissions from DISK:
+     merging a permissions PR on GitHub grants nothing until the checkout has it.
+  2. The plan's repo is in devbrain-projects.allow.
+  3. The repo's checkout exists, is clean, and is not behind origin. The runner's
+     clean-tree check runs BEFORE its pull, so a dirty checkout never heals itself.
+  4. The repo has at least one verification command granted.
+  5. The plan does not ask for commands that are never granted (see NEVER_GRANTED).
+  6. Every `cmd@subdir` command granted can actually EXECUTE (`devbrain-verify-run
+     --check`): the subdir exists, the declared dependencies are installed, the script
+     is in package.json. Check 4 only sees that a permission EXISTS. A permission that
+     exists and cannot be used blocks a plan exactly like a missing one — that is how
+     five of seven approved plans blocked in one night with the preflight green.
+  7. The plan does not ask for `npm install` or for cloning a repo: network downloads
+     are not granted unattended.
+  8. The plan does not ask for something bin/devbrain refuses at the tool level
+     regardless of any allowlist (a migration write in a repo listed in
+     devbrain-migration-block.list, or a write against a production database).
+
+`--plan <file>` checks ONE plan (approved or not) with the same checks. day_apply
+uses it before writing `aprobado:`, so a plan that cannot run is refused while you are
+sitting there, not at 23:00.
+
+Exit 0 if everything is ready, 1 if something needs fixing, 2 on bad usage.
+Schedule it a few hours before the runner (e.g. 20:00 for a 23:00 run).
+"""
+import os, re, subprocess, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)  # this checkout
+# Every path is overridable, for the same reason as everywhere else in this repo: a
+# check that was only ever seen passing cannot be told apart from one that looks at
+# nothing, and it cannot be tested in isolation without these.
+QUEUE = os.environ.get("DEVBRAIN_QUEUE_DIR", os.path.expanduser("~/dev/queue"))
+PROJECTS = os.environ.get("DEVBRAIN_PROJECTS_DIR", os.path.expanduser("~/dev/projects"))
+CONFIG = os.environ.get("DEVBRAIN_MC_DIR", ROOT)
+NO_FETCH = os.environ.get("DEVBRAIN_PREFLIGHT_NO_FETCH", "") == "1"
+VERIFY_RUN = os.path.join(HERE, "devbrain-verify-run")
+
+# Commands no allowlist grants. Extend this for your own stack.
+NEVER_GRANTED = ("npm install", "gh repo clone", "git clone")
+# A line that says "do not do this" is not a request to do it.
+NEGATIONS = ("do not ask", "don't ask", "not granted", "never", "forbidden", "instead of",
+             "without ", "no need", "not needed", "does not need")
+
+
+def git(d, *a):
+    r = subprocess.run(["git", "-C", d, *a], capture_output=True, text=True)
+    return r.stdout.strip(), r.returncode
+
+
+def fm(text, key):
+    m = re.search(rf"^{key}:\s*(.*)$", text, re.M)
+    return m.group(1).strip() if m else ""
+
+
+def split_multi(value):
+    # Inverse of lib/queue.sh's fm_set join: `bloqueado_por` can hold more than one
+    # command, joined with " ‖ " because the frontmatter is a single line.
+    return [c for c in value.split(" ‖ ") if c]
+
+
+def command_granted(granted_raw, candidate):
+    # Same logic as verify_tools_for in bin/devbrain: comma-separated entries,
+    # "cmd@subdir" is composed as "cd <subdir> && <cmd>" before comparing, and a
+    # ":*" suffix is a prefix match — exactly how Claude Code reads Bash(cmd:*)
+    # versus an exact Bash(cmd).
+    candidate = candidate.strip()
+    for entry in granted_raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "@" in entry:
+            cmd, _, subdir = entry.partition("@")
+            entry = f"cd {subdir} && {cmd}"
+        if entry.endswith(":*"):
+            if candidate.startswith(entry[:-2]):
+                return True
+        elif candidate == entry:
+            return True
+    return False
+
+
+def behind_origin(d, branch="main"):
+    if not NO_FETCH:
+        git(d, "fetch", "-q", "origin", branch)
+    n, rc = git(d, "rev-list", "--count", f"HEAD..origin/{branch}")
+    return int(n) if rc == 0 and n.isdigit() else 0
+
+
+def read_list(path):
+    if not os.path.isfile(path):
+        return set()
+    return {l.strip() for l in open(path) if l.strip() and not l.startswith("#")}
+
+
+def main(argv):
+    problems, ready, warnings = [], [], []
+    only = None
+    if "--plan" in argv:
+        i = argv.index("--plan")
+        if i + 1 >= len(argv):
+            print("preflight: --plan needs a file", file=sys.stderr)
+            return 2
+        only = os.path.abspath(argv[i + 1])
+        if not os.path.isfile(only):
+            print(f"preflight: no such plan: {only}", file=sys.stderr)
+            return 2
+
+    # 1. This checkout first: the permissions come from it.
+    behind = behind_origin(ROOT)
+    if behind:
+        problems.append(f"the devbrain checkout is {behind} commit(s) behind origin. The runner "
+                        f"reads permissions from DISK: run `git -C {ROOT} pull --ff-only`.")
+
+    allowed = read_list(os.path.join(CONFIG, "devbrain-projects.allow"))
+    migration_blocked = read_list(os.path.join(CONFIG, "devbrain-migration-block.list"))
+
+    commands = {}
+    cfile = os.path.join(CONFIG, "devbrain-verify.commands")
+    if os.path.isfile(cfile):
+        for l in open(cfile):
+            if l.startswith("#") or "=" not in l:
+                continue
+            repo, _, rest = l.partition("=")
+            commands[repo.strip()] = rest.strip()
+
+    seen_repos = set()
+    if only:
+        files = [(os.path.basename(only), only)]
+    else:
+        files = [(f, os.path.join(QUEUE, f)) for f in sorted(os.listdir(QUEUE))]
+    for f, path in files:
+        if not f.endswith(".plan.md"):
+            continue
+        t = open(path, encoding="utf-8", errors="replace").read()
+        if not only and (fm(t, "status") != "approved" or not fm(t, "aprobado")):
+            continue
+        repo, name = fm(t, "repo"), f[:-8]
+
+        if repo not in allowed:
+            problems.append(f"{name}: repo `{repo}` is not in devbrain-projects.allow "
+                            f"-- the runner pauses it on its own.")
+            continue
+
+        if repo not in seen_repos:
+            seen_repos.add(repo)
+            d = os.path.join(PROJECTS, repo)
+            if not os.path.isdir(os.path.join(d, ".git")):
+                problems.append(f"{repo}: no checkout at {d} (that is where the night runner works).")
+            else:
+                dirty, _ = git(d, "status", "--porcelain")
+                if dirty:
+                    problems.append(
+                        f"{repo}: dirty checkout ({len(dirty.splitlines())} file(s)). The clean-tree "
+                        f"check runs BEFORE the pull, so this does not heal itself. "
+                        f"First line: {dirty.splitlines()[0][:60]}")
+                branch = git(d, "rev-parse", "--abbrev-ref", "HEAD")[0] or "main"
+                b = behind_origin(d, branch)
+                if b:
+                    problems.append(f"{repo}: checkout is {b} commit(s) behind origin/{branch}.")
+                # 6. The permission has to be USABLE, not just present.
+                r = subprocess.run(
+                    [VERIFY_RUN, "--check", repo], capture_output=True, text=True,
+                    env={**os.environ, "DEVBRAIN_PROJECTS_DIR": PROJECTS,
+                         "DEVBRAIN_VERIFY_COMMANDS_FILE": cfile})
+                if r.returncode != 0:
+                    for line in (r.stdout + r.stderr).splitlines():
+                        if line.startswith("FAIL") or line.startswith("devbrain-verify-run"):
+                            problems.append(line)
+
+        if repo not in commands:
+            problems.append(f"{name}: `{repo}` has NO command in devbrain-verify.commands "
+                            f"-- any verification ends in blocked, with no retry.")
+
+        # Different from the check above ("has AT LEAST ONE"): a plan that already
+        # blocked once left the EXACT command it lacked in `bloqueado_por`. If that
+        # specific command is still not granted, approving it again ends exactly the same.
+        previous = fm(t, "bloqueado_por")
+        if previous:
+            for cmd in split_multi(previous):
+                if not command_granted(commands.get(repo, ""), cmd):
+                    problems.append(
+                        f"{name}: it already blocked on `{cmd}` and that command is still not in "
+                        f"devbrain-verify.commands for `{repo}` -- it will block on the same thing.")
+
+        # Only flag a line that ASKS for it, not one that forbids it: plans name these
+        # commands to warn against them, and flagging that would be a false positive.
+        # A check that shouts at what is correct trains people to ignore it.
+        for line in t.splitlines():
+            low = line.lower()
+            if low.startswith("bloqueado_por:"):
+                continue  # history of a previous block (covered by "already blocked")
+            if not any(bad in low for bad in NEVER_GRANTED):
+                continue
+            if any(n in low for n in NEGATIONS):
+                continue
+            problems.append(f"{name}: the plan asks for `{[b for b in NEVER_GRANTED if b in low][0]}`, "
+                            f"which is never granted. It will end in blocked. Line: {line.strip()[:60]}")
+
+        # Not "a permission that could be granted": an action bin/devbrain refuses ALWAYS,
+        # at the tool level, whatever devbrain-verify.commands says. Say so with a different
+        # message, so the answer (pause the plan, do it by hand, or redesign it) is clear
+        # before the run and not after.
+        always_blocked = []
+        if repo in migration_blocked:
+            always_blocked.append(("migration",
+                f"write a migration in `{repo}` (listed in devbrain-migration-block.list; the "
+                f"Edit/Write tools are blocked there, see bin/devbrain)"))
+        always_blocked.append(("production",
+            "write against a production database (never granted in an unattended session)"))
+        for pattern, reason in always_blocked:
+            for line in t.splitlines():
+                low = line.lower()
+                if low.startswith("bloqueado_por:") or pattern not in low:
+                    continue
+                if any(n in low for n in NEGATIONS):
+                    continue
+                text = (f"{name}: the plan asks to {reason}. No entry in devbrain-verify.commands "
+                        f"can grant this -- pause it, do it interactively, or redesign it without "
+                        f"that action. Line: {line.strip()[:60]}")
+                # A substring heuristic ("migration", "production") with false positives:
+                # "a library version migration", "the production bundle of a build". At night
+                # it stays a problem; as the approval gate (--plan) it is a warning, because
+                # refusing a valid plan over a word is worse than warning about it.
+                (warnings if only else problems).append(text)
+                break
+        ready.append(name)
+
+    if not ready and not problems:
+        print("preflight: no approved plans. The night will do nothing.")
+        return 0
+
+    print(f"preflight: {len(ready)} approved plan(s), {len(problems)} problem(s)")
+    for pr in problems:
+        print(f"  ✗ {pr}")
+    for w in warnings:
+        print(f"  ⚠ (warning, check by eye) {w}")
+    if not problems:
+        for n in ready:
+            print(f"  ✓ {n}")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
