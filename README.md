@@ -109,6 +109,8 @@ both markers set by a human.
 
 ```
 bin/            the actual commands (devbrain, devbrain-queue, devbrain-night, ...)
+                (devbrain-verify-run runs @subdir verification commands; devbrain-preflight
+                checks that approved plans can actually run — see docs/CONCEPTS.md)
 lib/            shared shell/python helpers sourced by bin/*
 claude/         Claude Code skills and status line used by the coding-agent side
 openclaw/       persona/config templates for the OpenClaw messaging bridge, plus

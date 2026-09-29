@@ -20,7 +20,8 @@
 #
 # A pattern may end in `@<subdir>`, when the repo's package.json (or other tool
 # config) lives under a subdirectory rather than the repo root:
-#     npm run build@frontend                       -> `cd frontend && npm run build`
+#     npm run build@frontend                       -> run through bin/devbrain-verify-run, which
+#                                                     cd's into frontend/ itself
 # <subdir> is validated at load time — absolute paths and `..` are refused loudly
 # (to stderr), never silently dropped or let through.
 #

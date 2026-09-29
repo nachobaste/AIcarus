@@ -34,8 +34,8 @@ grep -q 'Read(//\${HOME#/}/.openclaw/\*\*)' "$DB" && echo "OK: openclaw denied" 
 grep -q 'Read(//\${HOME#/}/.ssh/\*\*)' "$DB" && echo "OK: ssh denied" || exit 1
 
 # 3. timeout wraps the claude calls
-grep -q 'with_timeout 2700 claude' "$DB" && echo "OK: execute timeout" || exit 1
-grep -q 'with_timeout 900 claude' "$DB" && echo "OK: plan timeout" || exit 1
+grep -q 'with_timeout 2700 "\$CLAUDE_BIN"' "$DB" && echo "OK: execute timeout" || exit 1
+grep -q 'with_timeout 900 "\$CLAUDE_BIN"' "$DB" && echo "OK: plan timeout" || exit 1
 
 # 3c. base-branch override lookup must be set -e safe: grep returns 1 for any repo NOT in
 # the override file, and with pipefail that would kill the whole run. Regression from a

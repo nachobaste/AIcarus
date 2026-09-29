@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""devbrain-verify-run — run a verification command declared with `@subdir`.
+
+WHY THIS EXISTS
+devbrain-verify.commands declares `npm run test:run@frontend`, and bin/devbrain used to
+turn that into the literal permission `Bash(cd frontend && npm run test:run)`. A literal
+is an exact string, and the session's shell REMEMBERS its working directory: after the
+first `cd frontend && npm run build` the session is already in frontend/, so the second
+`cd frontend && ...` fails with "no such file or directory", the session retries the bare
+command, and the bare command is not granted ("requires approval"). The plan ends up
+`blocked`. It happened to four plans in a single night, and had happened twice before:
+each time the prompt was patched, and the shell set the same trap again.
+
+THE SPLIT (same idea as any script the session may call but not edit): the session asks
+for the command, this script owns the `cd` and the list.
+  1. It only runs the EXACT command that devbrain-verify.commands declares with `@subdir`
+     for that repo. Anything else is rejected, with no extra arguments:
+     `npm run test:run` yes, `npm run test:run -- --foo` no.
+  2. It executes WITHOUT a shell (an argument list): a `;` or `&&` that reaches this
+     script is just another argument and matches nothing.
+  3. The subdir cannot be absolute, contain `..`, or escape the repo through a symlink.
+  4. `npm install` and friends cannot be declared: unattended network installs stay
+     forbidden, and that does not change here.
+
+USAGE
+  devbrain-verify-run <repo> <command...>     run the command in its subdir
+  devbrain-verify-run --check <repo>          check, WITHOUT running anything, that each
+                                              declared command can actually execute
+                                              (used by devbrain-preflight)
+"""
+import json, os, re, shlex, subprocess, sys
+
+# Same defaults as bin/devbrain: this checkout's own verify file, and ~/dev/projects.
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECTS = os.environ.get("DEVBRAIN_PROJECTS_DIR", os.path.expanduser("~/dev/projects"))
+VERIFY_FILE = os.environ.get("DEVBRAIN_VERIFY_COMMANDS_FILE",
+                             os.path.join(os.path.dirname(HERE), "devbrain-verify.commands"))
+REPO_OK = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def die(msg, code=2):
+    print(f"devbrain-verify-run: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def subdir_ok(subdir):
+    # Same rules as verify_tools_for in bin/devbrain.
+    if not subdir or subdir.startswith("/"):
+        return False
+    return not any(p in ("..", ".", "") for p in subdir.split("/"))
+
+
+def declared(repo):
+    """[(command, subdir)] for the repo's `cmd@subdir` entries, already validated."""
+    salida = []
+    try:
+        lines = open(VERIFY_FILE, encoding="utf-8").read().splitlines()
+    except OSError:
+        return salida
+    for l in lines:
+        if l.startswith("#") or "=" not in l:
+            continue
+        r, _, rest = l.partition("=")
+        if r.strip() != repo:
+            continue
+        for entry in rest.split(","):
+            entry = entry.strip()
+            if "@" not in entry:
+                continue
+            cmd, _, sub = entry.rpartition("@")
+            cmd, sub = cmd.strip(), sub.strip()
+            if cmd and subdir_ok(sub):
+                salida.append((cmd, sub))
+    return salida
+
+
+def repo_dir_of(repo):
+    if not REPO_OK.match(repo):
+        die(f"invalid repo name: {repo}")
+    d = os.path.join(PROJECTS, repo)
+    if not os.path.isdir(os.path.join(d, ".git")):
+        die(f"not a known repo: {repo}")
+    return os.path.realpath(d)
+
+
+def resolve(repo_dir, sub):
+    """Real path of the subdir, or None if it does not exist or leaves the repo."""
+    real = os.path.realpath(os.path.join(repo_dir, sub))
+    if not (real == repo_dir or real.startswith(repo_dir + os.sep)):
+        return None
+    return real if os.path.isdir(real) else None
+
+
+def check(repo):
+    repo_dir = repo_dir_of(repo)
+    bad = 0
+    entries = declared(repo)
+    for cmd, sub in entries:
+        d = resolve(repo_dir, sub)
+        if d is None:
+            print(f"FAIL {repo}: `{cmd}@{sub}` -- the subdir does not exist or leaves the repo")
+            bad += 1
+            continue
+        toks = shlex.split(cmd)
+        pkg = os.path.join(d, "package.json")
+        if toks and toks[0] in ("npm", "npx"):
+            if not os.path.isfile(pkg):
+                print(f"FAIL {repo}: `{cmd}@{sub}` -- no package.json in {sub}/")
+                bad += 1
+                continue
+            if not os.path.isdir(os.path.join(d, "node_modules")):
+                print(f"FAIL {repo}: `{cmd}@{sub}` -- node_modules missing in {sub}/ "
+                      f"(unattended `npm install` is never granted: install it yourself, interactively)")
+                bad += 1
+                continue
+            try:
+                meta = json.load(open(pkg, encoding="utf-8"))
+            except (OSError, ValueError):
+                meta = {}
+            # node_modules can exist and be stale: a repo can declare dependencies that were
+            # never installed, and its tests cannot run. That is what made two sessions ask
+            # for `npm install`, which is never granted unattended.
+            declared_deps = {**meta.get("dependencies", {}), **meta.get("devDependencies", {})}
+            missing = sorted(n for n in declared_deps
+                            if not os.path.isdir(os.path.join(d, "node_modules", n)))
+            if missing:
+                print(f"FAIL {repo}: `{cmd}@{sub}` -- {len(missing)} declared dependencies "
+                      f"not installed in {sub}/ ({', '.join(missing[:4])}{'...' if len(missing) > 4 else ''}). "
+                      f"run `npm ci` interactively; nothing gets installed unattended")
+                bad += 1
+                continue
+            if toks[:2] == ["npm", "run"] and len(toks) >= 3:
+                scripts = meta.get("scripts", {})
+                if toks[2] not in scripts:
+                    print(f"FAIL {repo}: `{cmd}@{sub}` -- {sub}/package.json does not define the script `{toks[2]}`")
+                    bad += 1
+                    continue
+        print(f"ok   {repo}: `{cmd}` in {sub}/")
+    return 1 if bad else 0
+
+
+def run(repo, words):
+    repo_dir = repo_dir_of(repo)
+    requested = " ".join(words)
+    entries = declared(repo)
+    for cmd, sub in entries:
+        if requested == cmd:
+            d = resolve(repo_dir, sub)
+            if d is None:
+                die(f"the subdir `{sub}` of `{cmd}` does not exist or leaves the repo", 3)
+            r = subprocess.run(shlex.split(cmd), cwd=d)
+            sys.exit(r.returncode)
+    allowed = ", ".join(f"`{c}`" for c, _ in entries) or "(none)"
+    die(f"`{requested}` is not declared with @subdir for {repo}. "
+          f"Allowed commands: {allowed}. It runs exactly as declared, with no extra arguments.")
+
+
+def main(argv):
+    if len(argv) >= 3 and argv[1] == "--check" and len(argv) == 3:
+        return check(argv[2])
+    if len(argv) < 3 or argv[1].startswith("-"):
+        die(__doc__.split("USAGE")[1].strip())
+    return run(argv[1], argv[2:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

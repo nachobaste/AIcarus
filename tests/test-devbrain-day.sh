@@ -69,9 +69,12 @@ EOF
 }
 seed
 
+# day_apply gates on devbrain-preflight; a stub keeps this test off the real checkouts.
+printf '#!/bin/bash\nexit 0\n' > "$TMP/pf-ok"; chmod +x "$TMP/pf-ok"
+
 run() { # feeds scripted stdin, one line per proposal response
   DEVBRAIN_QUEUE_DIR="$QUEUE_DIR" DEVBRAIN_WIKI_DIR="$WIKI_DIR" \
-  RESEARCH_ALLOWFILE="$TMP/allow" DAY_ENGINE="$DIR/lib/day_engine.py" \
+  RESEARCH_ALLOWFILE="$TMP/allow" DAY_ENGINE="$DIR/lib/day_engine.py" DAY_PREFLIGHT_BIN="$TMP/pf-ok" \
   bash "$BIN"
 }
 

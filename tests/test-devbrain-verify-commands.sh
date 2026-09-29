@@ -92,20 +92,19 @@ echo "OK: the execute allowlist calls the lookup"
   || fail "control failed: the lookup returned nothing for a declared repo"
 echo "OK: control — the lookup does return patterns when a repo declares them"
 
-# ---- 9. @subdir emits a compound cd-then-command pattern -------------------
-# Verified empirically against the real Claude Code Bash allowedTools matcher,
-# not simulated: `Bash(cd frontend && npm run build)` as an exact
-# pattern let that command run, refused `cd frontend && npm run test` (same
-# binary, different script) by asking for approval instead of running silently,
-# and a `cd ../x` escape was blocked by the harness's own sandbox boundary
-# before the allowedTools string even mattered. This is what makes @subdir safe
-# to ship, not just plausible.
+# ---- 9. @subdir emits ONE grant for devbrain-verify-run, not a `cd && cmd` literal
+# The literal form `Bash(cd frontend && npm run build)` works for one call and breaks on
+# the second call of a session: the Bash tool keeps its working directory, so the second
+# `cd frontend && ...` fails, and the session falls back to a bare, ungranted command.
+# The wrapper does the cd itself; tests/test-verify-run.sh replays the trap.
 OUT_PROD="$("$DB" verify-tools prodapp)"
-[[ "$OUT_PROD" == *"Bash(cd frontend && npm run build)"* ]] \
-  || fail "prodapp missing the frontend build command (got: $OUT_PROD)"
-[[ "$OUT_PROD" == *"Bash(cd frontend && npm run test:run)"* ]] \
-  || fail "prodapp missing the frontend test:run command (got: $OUT_PROD)"
-echo "OK: @subdir emits a compound 'cd <subdir> && <cmd>' pattern"
+[[ "$OUT_PROD" == *"bin/devbrain-verify-run prodapp:*)"* ]] \
+  || fail "prodapp missing the devbrain-verify-run grant (got: $OUT_PROD)"
+[[ "$OUT_PROD" != *"Bash(cd "* ]] \
+  || fail "a cd-compound literal is back in the grants (the cwd trap): $OUT_PROD"
+[ "$(printf '%s' "$OUT_PROD" | grep -o 'devbrain-verify-run' | wc -l | tr -d ' ')" = 1 ] \
+  || fail "the wrapper grant must appear exactly once per project (got: $OUT_PROD)"
+echo "OK: @subdir emits a single devbrain-verify-run grant, no cd-compound literal"
 
 # ---- 10. a repo with NO @subdir keeps the plain form (regression) ----------
 # qaapp's lines have no @; they must not silently grow a `cd .`.
@@ -120,8 +119,10 @@ echo "OK: a command with no @subdir is untouched, exactly as before"
 # the only one lives under services/support-api/package.json. Without @subdir,
 # no command declared for this repo could ever find anything to run.
 OUT_MKT="$("$DB" verify-tools mktapp)"
-[[ "$OUT_MKT" == *"Bash(cd services/support-api && npm test)"* ]] \
-  || fail "mktapp missing its subdir-scoped test command (got: $OUT_MKT)"
+[[ "$OUT_MKT" == *"bin/devbrain-verify-run mktapp:*)"* ]] \
+  || fail "mktapp missing its wrapper grant (got: $OUT_MKT)"
+grep -q '^mktapp=.*npm test@services/support-api' "$FILE" \
+  || fail "mktapp's subdir-scoped test command is no longer declared"
 echo "OK: a repo whose only package.json is under a subdir gets a working command"
 
 # ---- 12. a subdir escaping the repo is refused NOISILY, not silently -------

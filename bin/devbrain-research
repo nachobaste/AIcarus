@@ -42,7 +42,7 @@ ALLOWFILE="${RESEARCH_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
 WIKI="${RESEARCH_WIKI:-$HOME/dev/wiki}"
 BACKLOG="${RESEARCH_BACKLOG:-$WIKI/projects/mejoras-propuestas.md}"
 LOG="${RESEARCH_LOG:-$HOME/.openclaw/logs/research.log}"
-CLAUDE_BIN="${RESEARCH_CLAUDE_BIN:-claude}"
+CLAUDE_BIN="${RESEARCH_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
 MAX="${RESEARCH_MAX:-5}"
 
 STATE_DIR="${RESEARCH_STATE_DIR:-$HOME/.openclaw/state}"
