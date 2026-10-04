@@ -383,8 +383,8 @@ HARD RULES:
    that doesn't resolve discards the whole finding. Don't guess line numbers: open
    the file and look.
 2. Don't propose building things that already exist. In particular,
-   \`devbrain-drift\` (drift between knowledge stores), \`wiki-linkcheck\`
-   (wiki links), and \`notion-sync-check\` already exist. If you spot something
+   \`devbrain-drift\` (drift between knowledge stores) and \`wiki-linkcheck\`
+   (wiki links) already exist. If you spot something
    those cover, cite them instead of proposing to build them.
 3. Maximum $MAX findings. Prefer few and solid: one invented finding costs more
    than ten you didn't find.

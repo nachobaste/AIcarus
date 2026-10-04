@@ -38,12 +38,12 @@ description: a clean fixture skill
 # Ok Skill
 
 Cites ~/dev/wiki/lessons/verificacion-ciega-probar-el-instrumento.md and
-~/dev/devbrain/lib/classify.sh as sources, and links to
+~/dev/devbrain/lib/queue.sh as sources, and links to
 https://github.com/testowner/machine-config and https://docs.claude.com/en/docs.
 EOF
 
 # Fixture name list for the "no person names" sub-check — an invented surname,
-# same style test-classify.sh already uses, never a real person.
+# same style test-redact.sh already uses, never a real person.
 printf 'Fakesurname Uno\n' > "$TMP/redact-names.txt"
 
 run() { DRIFT_SNAPSHOT="$TMP/snap" DRIFT_LIVE="$TMP/live" \
@@ -153,8 +153,8 @@ run > "$OUT" 2>&1; RC=$?
 echo "OK: skill-content detects a person name via notion-redact.py"
 
 # (c-infra) a missing names list must skip the sub-check, not fail the run or
-# report a finding — same fail-closed-but-don't-crash contract redact_names()
-# documents (exit 2 = missing/empty list, exit 3 = missing redactor).
+# report a finding — the redactor fails closed (exit 2 = missing/empty list),
+# and drift skips instead of crashing.
 DRIFT_SNAPSHOT="$TMP/snap" DRIFT_LIVE="$TMP/live" DRIFT_WIKI="$TMP/wiki" \
   DRIFT_MEMORY="$TMP/mem" DRIFT_SKILLS="$TMP/skills" \
   NOTION_REDACT_BIN="$DIR/bin/notion-redact.py" \

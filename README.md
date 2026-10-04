@@ -170,9 +170,9 @@ personal-data territory:
   real personal data and are exactly the kind of thing you should *not* copy
   from someone else's config — build your own, and keep it read-only, "read
   live, answer, forget," never persisted to disk or the wiki.
-- **Notion sync.** Included (`bin/notion-sync*`), but it's *optional* — a
-  nice-to-have mirror of the queue/wiki into a Notion workspace, not something
-  devbrain needs to function. Ignore it if you don't use Notion.
+- **Notion sync.** The reference system mirrors its queue and wiki into a
+  Notion workspace. That mirror was built around one person's wiki layout, so
+  it doesn't ship here. A Notion mirror is a reasonable add-on if you want one.
 
 ## A note on the "house rules" file
 

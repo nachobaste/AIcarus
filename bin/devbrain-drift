@@ -55,9 +55,8 @@ RUNTIME_ONLY = {"openclaw-workspace-state.json"}
 # Allowlist, not denylist — same principle as devbrain-projects.allow and
 # devbrain-verify.commands ("Hard guardrail: allowlist (not denylist)").
 
-# Same wrapper lib/classify.sh's redact_names() uses, invoked directly here
-# (not through the bash wrapper) because this check needs the redacted text
-# back to diff against the original, not just a pass/fail exit code.
+# The person-name redactor. This check needs the redacted text back to diff
+# against the original, not just a pass/fail exit code.
 NOTION_REDACT_BIN = os.environ.get(
     "NOTION_REDACT_BIN", f"{HOME}/dev/devbrain/bin/notion-redact.py")
 
@@ -212,9 +211,8 @@ def redact_skill_body(body):
     anything. Returns None (not True/False) when the redaction subsystem
     itself is unavailable — missing redactor, missing/empty names file — so
     the caller can skip the sub-check instead of treating infrastructure
-    absence as either a finding or a crash. Mirrors the exit-code contract
-    lib/classify.sh's redact_names() documents (2 = missing/empty names
-    file, 3 = missing redactor) but does not fail devbrain-drift on either.
+    absence as either a finding or a crash (the redactor exits 2 on a
+    missing/empty names file); devbrain-drift does not fail on either.
     """
     if not os.path.isfile(NOTION_REDACT_BIN):
         print(f"devbrain-drift: skill name check skipped, redactor not found "

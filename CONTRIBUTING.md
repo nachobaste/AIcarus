@@ -12,19 +12,6 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   a hardcoded path, a username, a company name, an assumption that only holds for
   the original author's machine. These are the highest-value contributions: a
   starter kit that quietly only works for its own creator isn't a starter kit.
-  **Known open gap:** `bin/notion-sync-sources.py` and `bin/notion-sync-upsert.py`
-  (the optional Notion mirror) still model a Notion database schema with the
-  original author's own Spanish property names (`Semáforo`, `Motivo del
-  semáforo`, `Código`, `Área`, `Categoría`, ...). This is different in kind from
-  the interactive/LLM-facing scripts (already translated, see `git log`): a
-  Notion sync is inherently a worked example against *someone's* real database
-  schema, and whoever adopts it has to redesign the property mapping for their
-  own workspace either way — English vs. Spanish property names in the example
-  doesn't change that. Still, a PR that reworks the example around generic
-  English property names (updating both files' field-mapping tables together,
-  since they must agree on names) would remove the last visible sign this was
-  extracted from one specific setup, and is a legitimate contribution under
-  this category.
 - **A swappable piece that isn't actually swappable.** The README claims the
   messaging bridge, the LLM router, and the coding agent are all replaceable. If
   you tried to swap one and hit a place that assumed OpenClaw, or Kimi, or Claude
@@ -32,7 +19,7 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   request.
 - **A new safeguard, following the existing pattern.** Every guardrail in this
   repo (the propose-only workflow, `devbrain-verify.commands`, the migration
-  block list, `devbrain-check-blocked-actions`, `classify.sh`'s tiers) exists
+  block list, `devbrain-check-blocked-actions`) exists
   because something went wrong once and got turned into a mechanical rule instead
   of a remembered judgment call. See `docs/wiki-example/lessons/` for the shape a
   writeup like that takes. If you're proposing a new one, a short "here's the
