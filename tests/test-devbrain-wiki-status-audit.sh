@@ -171,7 +171,10 @@ echo "OK: error paths (missing wiki dir, unusable gh) exit 2"
 # flagged. If the mutated copy still reports the same finding, this test
 # suite was never actually exercising the comparison -- it would be a
 # checker nobody tried to fool. Operates on a COPY, never on $BIN itself.
-MUTANT="$TMP/mutated-devbrain-wiki-status-audit"
+# The copy sits in a bin/ next to a copy of lib/, so its shared-helper import
+# resolves: a mutant that dies on ImportError would pass this check vacuously.
+mkdir -p "$TMP/mut/bin"; cp -R "$DIR/lib" "$TMP/mut/lib"
+MUTANT="$TMP/mut/bin/mutated-devbrain-wiki-status-audit"
 cp "$BIN" "$MUTANT"
 python3 - "$MUTANT" <<'PYEOF'
 import sys
@@ -188,6 +191,8 @@ chmod +x "$MUTANT"
 
 MUT_OUT="$("$MUTANT")"
 MUT_RC=$?
+printf '%s\n' "$MUT_OUT" | grep -q "^wiki-status-audit: " \
+  || fail "the mutant did not run to completion (import error?) -- output: $MUT_OUT"
 
 if [ "$MUT_RC" = 1 ] && printf '%s\n' "$MUT_OUT" | grep -qF "testrepo#12	claim=OPEN	actual=MERGED"; then
   fail "mutation check failed: inverting the comparison did NOT change detection of testrepo#12 -- the check was never really checking this"

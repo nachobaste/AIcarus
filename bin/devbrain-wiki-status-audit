@@ -87,8 +87,10 @@ import glob
 import json
 import os
 import re
-import subprocess
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from devbrain_common import read_names, run  # noqa: E402
 
 HOME = os.path.expanduser("~")
 WIKI = os.environ.get("WIKI_STATUS_AUDIT_WIKI", f"{HOME}/dev/wiki")
@@ -128,21 +130,6 @@ QUOTE_SPAN_RES = [
 
 def warn(msg):
     print(f"devbrain-wiki-status-audit: {msg}", file=sys.stderr)
-
-
-def read_names(path):
-    names = set()
-    if not os.path.isfile(path):
-        return names
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            name = line.split("#", 1)[0].strip()
-            if name:
-                names.add(name)
-    return names
 
 
 def mask_spans(text, spans):
@@ -230,20 +217,12 @@ def find_pr_mentions(scan_text, page_repo, allowed_repos):
     return mentions
 
 
-def run(cmd):
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return proc.returncode == 0, proc.stdout, proc.stderr
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, "", str(exc)
-
-
 def gh_pr_state(owner, repo, number, cache):
     key = (owner, repo, number)
     if key in cache:
         return cache[key]
     ok, out, err = run([GH_BIN, "pr", "view", number, "--repo", f"{owner}/{repo}",
-                        "--json", "state,mergedAt"])
+                        "--json", "state,mergedAt"], timeout=30)
     if not ok:
         warn(f"gh pr view failed for {owner}/{repo}#{number}: {err.strip()[:200]}")
         cache[key] = None
@@ -293,7 +272,7 @@ def main(argv):
               file=sys.stderr)
         return 2
 
-    ok, _, err = run([GH_BIN, "--version"])
+    ok, _, err = run([GH_BIN, "--version"], timeout=30)
     if not ok:
         print(f"devbrain-wiki-status-audit: gh not available ({GH_BIN}): {err.strip()[:200]}",
               file=sys.stderr)
