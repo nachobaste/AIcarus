@@ -34,7 +34,7 @@ Cost: exactly one `gh repo list` call, no matter how many repos exist. No `gh`
 calls per-repo (this is metadata GitHub already returns in one page).
 
 Usage:
-    devbrain-repo-audit [--quiet]
+    devbrain-repo-audit
 
 Exit codes:
     0  nothing to flag
@@ -110,8 +110,6 @@ def is_cloned(name):
 
 
 def main(argv):
-    quiet = "--quiet" in argv[1:]
-
     if not OWNER:
         print("devbrain-repo-audit: REPO_AUDIT_OWNER is not set. Set it to your "
               "own GitHub username -- there is no default.", file=sys.stderr)
@@ -142,10 +140,9 @@ def main(argv):
         if name not in allowed:
             findings.append((FINDING_UNCLASSIFIED, name, pushed))
 
-    if not quiet:
-        for kind, name, pushed in findings:
-            print(f"{kind}\t{name}\t{pushed}")
-        print(f"repo-audit: {len(findings)}")
+    for kind, name, pushed in findings:
+        print(f"{kind}\t{name}\t{pushed}")
+    print(f"repo-audit: {len(findings)}")
     return 1 if findings else 0
 
 

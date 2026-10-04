@@ -188,15 +188,12 @@ run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "url plant did not clean up, got $RC ($(cat "$OUT"))"
 echo "OK: skill-content detects a URL outside the domain allowlist, silent on github.com/docs.claude.com"
 
-# ---- exit codes and --quiet ------------------------------------------------
+# ---- exit codes ----------------------------------------------------------------
 printf '# Heartbeat\nx\n' > "$TMP/live/HEARTBEAT.md"
 run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 1 ] || fail "drift should exit 1, got $RC"
-run --quiet > "$TMP/q" 2>&1; RCQ=$?
-[ "$RCQ" -eq 1 ] || fail "--quiet must keep exit 1, got $RCQ"
-[ ! -s "$TMP/q" ] || fail "--quiet must print nothing, got: $(cat "$TMP/q")"
 rm "$TMP/live/HEARTBEAT.md"
-echo "OK: exit 1 on drift, --quiet keeps the code and prints nothing"
+echo "OK: exit 1 on drift"
 
 # ---- a missing store is an error, not a false 'clean' ----------------------
 DRIFT_SNAPSHOT="$TMP/no-such" DRIFT_LIVE="$TMP/live" \

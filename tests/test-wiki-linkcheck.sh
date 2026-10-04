@@ -75,12 +75,6 @@ printf 'only good links: [real](real.md) and [[real]]\n' > "$TMP/clean/ok.md"
 grep -q "unresolved: 0" "$TMP/out2" || fail "clean vault should report 0 unresolved"
 echo "OK: a clean vault reports clean and exits 0"
 
-# ---- --quiet keeps the verdict, drops the noise ---------------------------
-"$BIN" --quiet "$TMP/vault" > "$TMP/out3" 2>&1; RC3=$?
-[ "$RC3" -eq 1 ] || fail "--quiet must keep exit code 1, got $RC3"
-[ ! -s "$TMP/out3" ] || fail "--quiet must print nothing, got: $(cat "$TMP/out3")"
-echo "OK: --quiet keeps the exit code and prints nothing"
-
 # ---- a missing vault is an error, not a false 'clean' ----------------------
 "$BIN" "$TMP/does-not-exist" >/dev/null 2>"$TMP/err"; RC4=$?
 [ "$RC4" -eq 2 ] || fail "missing vault should exit 2, got $RC4"

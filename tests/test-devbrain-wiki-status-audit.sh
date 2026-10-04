@@ -152,14 +152,6 @@ echo "$OUT" | grep -q "^wiki-status-audit: 3$" \
 $OUT"
 echo "OK: all detection + silence assertions passed"
 
-# ---- --quiet: no output, same exit code ------------------------------------
-QOUT="$("$BIN" --quiet)"
-RCQ=$?
-[ -z "$QOUT" ] || fail "--quiet must print nothing, got:
-$QOUT"
-[ "$RCQ" = 1 ] || fail "--quiet must keep the same exit code, got $RCQ"
-echo "OK: --quiet suppresses output, keeps exit code"
-
 # ---- error paths -------------------------------------------------------------
 WIKI_STATUS_AUDIT_WIKI="$TMP/does-not-exist" "$BIN" >/dev/null 2>&1
 [ $? = 2 ] || fail "missing WIKI dir must exit 2"

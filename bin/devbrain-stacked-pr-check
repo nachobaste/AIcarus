@@ -32,7 +32,7 @@ number of local `git fetch` calls per repo (one per recently-merged devbrain/*
 PR found, typically 0-3, never one per devbrain branch that ever existed).
 
 Usage:
-    devbrain-stacked-pr-check [--quiet]
+    devbrain-stacked-pr-check
 
 Exit codes:
     0  no orphaned merges found
@@ -208,8 +208,6 @@ def check_project(project, base_overrides, cutoff_date):
 
 
 def main(argv):
-    quiet = "--quiet" in argv[1:]
-
     if not os.path.isdir(PROJECTS_DIR):
         print(f"devbrain-stacked-pr-check: STACKED_PR_PROJECTS_DIR no existe: {PROJECTS_DIR}",
               file=sys.stderr)
@@ -227,10 +225,9 @@ def main(argv):
     for project in projects:
         findings.extend(check_project(project, base_overrides, cutoff_date))
 
-    if not quiet:
-        for project, branch, number in findings:
-            print(f"{FINDING}\t{project}\t{branch}\t{number}")
-        print(f"stacked-pr: {len(findings)}")
+    for project, branch, number in findings:
+        print(f"{FINDING}\t{project}\t{branch}\t{number}")
+    print(f"stacked-pr: {len(findings)}")
     return 1 if findings else 0
 
 

@@ -72,7 +72,7 @@ Read-only against GitHub (`gh pr view`) and against the wiki and
 devbrain-projects.allow on disk. Never writes anything.
 
 Usage:
-    devbrain-wiki-status-audit [--quiet]
+    devbrain-wiki-status-audit
 
 Output (TSV, one finding per line):
     pr-state-outdated\t<page>:<line>\t<owner>/<repo>#<N>\tclaim=<X>\tactual=<Y>
@@ -282,8 +282,6 @@ def check_page(path, rel, page_repo, allowed_repos, pr_cache):
 
 
 def main(argv):
-    quiet = "--quiet" in argv[1:]
-
     if not os.path.isdir(WIKI):
         print(f"devbrain-wiki-status-audit: WIKI_STATUS_AUDIT_WIKI does not exist: {WIKI}",
               file=sys.stderr)
@@ -318,10 +316,9 @@ def main(argv):
         page_repo = stem if (is_status_page and stem in allowed_repos) else None
         findings.extend(check_page(path, rel, page_repo, allowed_repos, pr_cache))
 
-    if not quiet:
-        for row in findings:
-            print("\t".join(row))
-        print(f"wiki-status-audit: {len(findings)}")
+    for row in findings:
+        print("\t".join(row))
+    print(f"wiki-status-audit: {len(findings)}")
     return 1 if findings else 0
 
 

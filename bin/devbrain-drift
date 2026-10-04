@@ -14,7 +14,7 @@ Read-only. Never writes, never touches machine-config, never uses the network.
 Design: docs/superpowers/specs/drift-entre-almacenes-design.md
 
 Usage:
-    devbrain-drift [--quiet]
+    devbrain-drift
 
 Exit codes:
     0  no drift
@@ -286,7 +286,6 @@ def check_skill_content():
 
 
 def main(argv):
-    quiet = "--quiet" in argv[1:]
     for label, path in (("DRIFT_SNAPSHOT", SNAPSHOT), ("DRIFT_LIVE", LIVE),
                         ("DRIFT_WIKI", WIKI), ("DRIFT_MEMORY", MEMORY),
                         ("DRIFT_SKILLS", SKILLS)):
@@ -299,10 +298,9 @@ def main(argv):
                 + check_memory_index()
                 + check_skill_content())
 
-    if not quiet:
-        for check, detail in findings:
-            print(f"{check}\t{detail}")
-        print(f"drift: {len(findings)}")
+    for check, detail in findings:
+        print(f"{check}\t{detail}")
+    print(f"drift: {len(findings)}")
     return 1 if findings else 0
 
 

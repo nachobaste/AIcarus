@@ -231,15 +231,6 @@ run > "$OUT" 2>"$TMP/err"; RC=$?
 grep -q "stacked-pr: 0" "$OUT" || fail "clean repos should report stacked-pr: 0"
 echo "OK: clean repos report 0 and exit 0"
 
-# ---- --quiet keeps the exit code and prints nothing -------------------------
-cat > "$TMP/repoa-prs.json" <<JSON
-[{"number": 102, "headRefName": "devbrain/orphan", "mergedAt": "$(iso_days_ago 1)"}]
-JSON
-run --quiet > "$TMP/q" 2>"$TMP/err"; RCQ=$?
-[ "$RCQ" -eq 1 ] || fail "--quiet must keep exit 1, got $RCQ"
-[ ! -s "$TMP/q" ] || fail "--quiet must print nothing, got: $(cat "$TMP/q")"
-echo "OK: exit 1 on findings, --quiet keeps the code and prints nothing"
-
 # ---- a missing config path is a hard error, not a false 'clean' ------------
 STACKED_PR_PROJECTS_DIR="$TMP/no-such-dir" STACKED_PR_ALLOWFILE="$TMP/allow" \
 STACKED_PR_BASE_OVERRIDE="$TMP/override" STACKED_PR_GH="$TMP/bin/gh" \
