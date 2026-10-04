@@ -47,6 +47,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from config_path import config_path  # noqa: E402
 from devbrain_common import read_names, run  # noqa: E402
 
 HOME = os.path.expanduser("~")
@@ -54,10 +55,10 @@ HOME = os.path.expanduser("~")
 # wrong account's repos on anyone else's machine. Must be set explicitly.
 OWNER = os.environ.get("REPO_AUDIT_OWNER")
 PROJECTS_DIR = os.environ.get("REPO_AUDIT_PROJECTS_DIR", f"{HOME}/dev/projects")
-ALLOWFILE = os.environ.get("REPO_AUDIT_ALLOWFILE",
-                            f"{HOME}/dev/devbrain/devbrain-projects.allow")
-EXCLUDEFILE = os.environ.get("REPO_AUDIT_EXCLUDEFILE",
-                              f"{HOME}/dev/devbrain/devbrain-projects.excluded")
+ALLOWFILE = os.environ.get("REPO_AUDIT_ALLOWFILE") or config_path(
+    "devbrain-projects.allow", f"{HOME}/dev/devbrain")
+EXCLUDEFILE = os.environ.get("REPO_AUDIT_EXCLUDEFILE") or config_path(
+    "devbrain-projects.excluded", f"{HOME}/dev/devbrain")
 GH_BIN = os.environ.get("REPO_AUDIT_GH", "gh")
 
 FINDING_NOT_CLONED = "repo-not-cloned"

@@ -90,12 +90,13 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from config_path import config_path  # noqa: E402
 from devbrain_common import read_names, run  # noqa: E402
 
 HOME = os.path.expanduser("~")
 WIKI = os.environ.get("WIKI_STATUS_AUDIT_WIKI", f"{HOME}/dev/wiki")
-ALLOWFILE = os.environ.get("WIKI_STATUS_AUDIT_ALLOWFILE",
-                            f"{HOME}/dev/devbrain/devbrain-projects.allow")
+ALLOWFILE = os.environ.get("WIKI_STATUS_AUDIT_ALLOWFILE") or config_path(
+    "devbrain-projects.allow", f"{HOME}/dev/devbrain")
 GH_BIN = os.environ.get("WIKI_STATUS_AUDIT_GH", "gh")
 # No default: a real GitHub username baked in here as a fallback would
 # silently attribute every bare mention to the wrong account on anyone

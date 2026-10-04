@@ -49,7 +49,7 @@ If your bridge requires an explicit approval step for shell commands, after each
 4. The PR link arrives → review it and **Merge** from the GitHub app yourself.
 
 ## Valid projects
-Whatever is listed in `devbrain-projects.allow` at the root of this repo — run
+Whatever is listed in `config/devbrain-projects.allow` — run
 `/bash devbrain projects` to see what's actually cloned locally. Any repo you've
 marked as production-sensitive (see `devbrain-base-branch.override` and
 `devbrain-migration-block.list`) still goes through devbrain like any other, just

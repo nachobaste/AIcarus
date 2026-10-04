@@ -21,7 +21,7 @@ Your cheat sheet. Fill in the blanks for your own machine and repos.
 
 ## Projects (devbrain's allowlist)
 
-Keep this table in sync with `devbrain-projects.allow` at the root of this repo.
+Keep this table in sync with `config/devbrain-projects.allow` in this repo.
 Example format:
 
 | Project | What it is |

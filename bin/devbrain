@@ -3,7 +3,8 @@
 # Two modes: plan (propose only, touches nothing) and execute (branch -> PR).
 # Design: see README.md (propose-only loop). Version-controlled alongside this repo.
 # Model split: a stronger model plans and reviews (judgment), another one executes.
-# Override with DEVBRAIN_PLAN_MODEL / DEVBRAIN_EXEC_MODEL and the matching *_EFFORT.
+# Each role's model and effort come from config/models.conf or DEVBRAIN_MODEL_<ROLE>
+# (lib/models.sh; DEVBRAIN_PLAN_MODEL / DEVBRAIN_EXEC_MODEL and *_EFFORT still work).
 # Pin exact model IDs, not the "opus"/"sonnet" aliases: an alias resolves to whatever
 # the family's current default is, and a new release can change it under you.
 set -euo pipefail
@@ -14,8 +15,6 @@ set -euo pipefail
 # found" (rc=127) on every unattended run while the log looks normal. Fall back to the
 # installer's location when the interactive PATH does not have it either (launchd/cron).
 CLAUDE_BIN="${DEVBRAIN_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
-PLAN_MODEL="${DEVBRAIN_PLAN_MODEL:-claude-opus-5-5}";    PLAN_EFFORT="${DEVBRAIN_PLAN_EFFORT:-high}"
-EXEC_MODEL="${DEVBRAIN_EXEC_MODEL:-claude-sonnet-5-5}";  EXEC_EFFORT="${DEVBRAIN_EXEC_EFFORT:-medium}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
 HOUSE_RULES="${DEVBRAIN_HOUSE_RULES:-$HOME/dev/CLAUDE.md}"
@@ -30,11 +29,13 @@ HOUSE_RULES="${DEVBRAIN_HOUSE_RULES:-$HOME/dev/CLAUDE.md}"
 # whole thing also works from a non-standard layout, not only for isolating
 # fixtures in tests/*.sh.
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ALLOWFILE="${DEVBRAIN_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
-BASE_BRANCH_OVERRIDE_FILE="${DEVBRAIN_BASE_BRANCH_OVERRIDE_FILE:-$ROOT/devbrain-base-branch.override}"
-VERIFY_COMMANDS_FILE="${DEVBRAIN_VERIFY_COMMANDS_FILE:-$ROOT/devbrain-verify.commands}"
-MIGRATION_BLOCK_FILE="${DEVBRAIN_MIGRATION_BLOCK_FILE:-$ROOT/devbrain-migration-block.list}"
+source "$ROOT/lib/config.sh"    # config_path: config/<name>, or $DEVBRAIN_CONFIG_DIR/<name>
+ALLOWFILE="${DEVBRAIN_ALLOWFILE:-$(config_path devbrain-projects.allow)}"
+BASE_BRANCH_OVERRIDE_FILE="${DEVBRAIN_BASE_BRANCH_OVERRIDE_FILE:-$(config_path devbrain-base-branch.override)}"
+VERIFY_COMMANDS_FILE="${DEVBRAIN_VERIFY_COMMANDS_FILE:-$(config_path devbrain-verify.commands)}"
+MIGRATION_BLOCK_FILE="${DEVBRAIN_MIGRATION_BLOCK_FILE:-$(config_path devbrain-migration-block.list)}"
 source "$ROOT/lib/queue.sh"     # with_timeout
+source "$ROOT/lib/models.sh"    # models_resolve: model/effort per role
 
 usage() { echo "usage: devbrain plan <project> \"<task>\" | devbrain execute <project> | devbrain projects"; exit 1; }
 
@@ -155,7 +156,12 @@ if ! grep -qxF ".devbrain/" .gitignore 2>/dev/null; then
 fi
 
 case "$MODE" in plan|execute)
-  [ -x "$CLAUDE_BIN" ] || { echo "devbrain: claude binary not found or not executable at $CLAUDE_BIN (set DEVBRAIN_CLAUDE_BIN)" >&2; exit 1; } ;;
+  [ -x "$CLAUDE_BIN" ] || { echo "devbrain: claude binary not found or not executable at $CLAUDE_BIN (set DEVBRAIN_CLAUDE_BIN)" >&2; exit 1; }
+  # Resolved before any session, so a rejected value stops here and claude never runs
+  # with it. The reviewer falls back to plan's values.
+  models_resolve plan claude-opus-5-5 high || exit 2;          PLAN_ARGS=("${MODEL_ARGS[@]}")
+  models_resolve execute claude-sonnet-5-5 medium || exit 2;   EXEC_ARGS=("${MODEL_ARGS[@]}")
+  models_resolve review claude-opus-5-5 high plan || exit 2;   REVIEW_ARGS=("${MODEL_ARGS[@]}") ;;
 esac
 
 case "$MODE" in
@@ -176,7 +182,7 @@ plan)
     printf 'Explore the code as needed and produce a SHORT PLAN (max ~150 words, list format) for a guided beginner:\n'
     printf '1) which files you will touch, 2) what changes, 3) risks, 4) how to verify it.\n'
     printf 'Do NOT modify anything. Respond ONLY with the plan.\n'
-  } | with_timeout 900 "$CLAUDE_BIN" -p --model "$PLAN_MODEL" --effort "$PLAN_EFFORT" --permission-mode plan \
+  } | with_timeout 900 "$CLAUDE_BIN" -p "${PLAN_ARGS[@]}" --permission-mode plan \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)" \
     --allowedTools "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(rg:*)" \
     | tee .devbrain/plan-latest.md
@@ -247,7 +253,7 @@ execute)
     printf 'Do NOT push, do NOT touch main, do NOT deploy. At the end, reply with a short summary of what you did.\n'
     printf 'Verification inside a subdirectory (e.g. "npm run build" in frontend/): run `%s/bin/devbrain-verify-run %s <command>` as ONE Bash call with nothing else on the line (no cd, &&, ;, echo, bash -c, or extra arguments). That script does the cd itself, so it works no matter which directory your shell is in and can be called several times in a row. Example: `%s/bin/devbrain-verify-run %s npm run build`. A command not declared for this repo is rejected; if you need it, write it to .devbrain/blocked-by.txt as described next.\n' "$ROOT" "$PROJECT" "$ROOT" "$PROJECT"
     printf 'If you need to run a verification command (build/lint/test/typecheck) and permission denies it, do NOT retry another way and do NOT skip it silently: write the EXACT command you needed into .devbrain/blocked-by.txt (one line, the command exactly as you tried it) and stop your verification there — keep implementing the rest of the plan normally. A human decides whether to grant that permission.\n'
-  } | with_timeout 2700 "$CLAUDE_BIN" -p --model "$EXEC_MODEL" --effort "$EXEC_EFFORT" --permission-mode acceptEdits \
+  } | with_timeout 2700 "$CLAUDE_BIN" -p "${EXEC_ARGS[@]}" --permission-mode acceptEdits \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)${EXTRA_DISALLOWED}" \
     --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(npm test:*),Bash(node test.js),Bash(npx tsc:*),Bash(ls:*),Bash(mkdir:*)$(verify_tools_for "$PROJECT")"
 
@@ -290,7 +296,7 @@ execute)
     printf 'Answer briefly, so a guided beginner can follow it.\n'
     printf 'The FIRST line must be EXACTLY one of: "VERDICT: APPROVE" | "VERDICT: CONCERNS" | "VERDICT: REJECT".\n'
     printf 'Then, at most 6 bullet points with concrete findings (file:line where relevant). If it is clean, say so clearly.\n'
-  } | with_timeout 900 "$CLAUDE_BIN" -p --model "$PLAN_MODEL" --effort "$PLAN_EFFORT" --permission-mode plan \
+  } | with_timeout 900 "$CLAUDE_BIN" -p "${REVIEW_ARGS[@]}" --permission-mode plan \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)" \
     --allowedTools "Read,Glob,Grep,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(ls:*),Bash(rg:*)" \
     > "$REVIEW_FILE" 2>/dev/null || true

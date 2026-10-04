@@ -121,14 +121,39 @@ openclaw/       persona/config templates for the OpenClaw messaging bridge, plus
                 a line in a prompt
 tests/          bash test suite (tests/*.sh — run any of them directly)
 docs/wiki-example/  a small, generic sample of the wiki convention (not a live wiki)
+config/         the files the scripts read (DEVBRAIN_CONFIG_DIR moves them):
+  devbrain-projects.allow        the repo allowlist (starts empty — see setup.sh)
+  devbrain-projects.excluded     repos deliberately out of scope, with reasons
+  devbrain-base-branch.override  per-repo "PRs target develop, not main" overrides
+  devbrain-verify.commands       per-repo commands devbrain may run unattended
+  devbrain-migration-block.list  per-repo "never write migrations here" list
+  models.conf                    model and effort per role (see "Choosing models")
 docs/telegram-templates.md  example message templates for the Telegram bot
-devbrain-projects.allow        the repo allowlist (starts empty — see setup.sh)
-devbrain-projects.excluded     repos deliberately out of scope, with reasons
-devbrain-base-branch.override  per-repo "PRs target develop, not main" overrides
-devbrain-verify.commands       per-repo commands devbrain may run unattended
-devbrain-migration-block.list  per-repo "never write migrations here" list
 setup.sh                       interactive first-run wizard
 ```
+
+## Choosing models
+
+Each step that calls Claude Code is a *role*: `plan`, `execute`, `review`, `research`,
+`interview`, `digest` and `wikilint`. Their model and effort live in
+`config/models.conf`, which ships fully commented with the defaults. Uncomment a line
+to change one role:
+
+```
+execute=claude-sonnet-5-5
+execute.effort=low
+review=claude-opus-5-5     # empty = same as plan
+```
+
+For each value, the first one set wins: `DEVBRAIN_MODEL_<ROLE>` /
+`DEVBRAIN_EFFORT_<ROLE>` in the environment, then the older `DEVBRAIN_PLAN_MODEL` /
+`DEVBRAIN_EXEC_MODEL` (and their `_EFFORT`), then `config/models.conf`, then the
+default. The scripts read the file themselves, so it also applies to scheduled
+runs. Only the model and effort are configurable: a value that looks like a flag is
+rejected and that call doesn't run, and permissions, tool lists and timeouts never
+come from this file. The Telegram router is not one of these roles; its model is
+chosen in OpenClaw. More detail in
+[`docs/CONCEPTS.md`](docs/CONCEPTS.md#choosing-models).
 
 ## Getting started
 

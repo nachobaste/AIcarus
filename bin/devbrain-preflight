@@ -33,6 +33,8 @@ Exit 0 if everything is ready, 1 if something needs fixing, 2 on bad usage.
 Schedule it a few hours before the runner (e.g. 20:00 for a 23:00 run).
 """
 import os, re, subprocess, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from config_path import config_dir  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)  # this checkout
@@ -41,7 +43,7 @@ ROOT = os.path.dirname(HERE)  # this checkout
 # nothing, and it cannot be tested in isolation without these.
 QUEUE = os.environ.get("DEVBRAIN_QUEUE_DIR", os.path.expanduser("~/dev/queue"))
 PROJECTS = os.environ.get("DEVBRAIN_PROJECTS_DIR", os.path.expanduser("~/dev/projects"))
-CONFIG = os.environ.get("DEVBRAIN_MC_DIR", ROOT)
+CONFIG = os.environ.get("DEVBRAIN_MC_DIR") or config_dir(ROOT)
 NO_FETCH = os.environ.get("DEVBRAIN_PREFLIGHT_NO_FETCH", "") == "1"
 VERIFY_RUN = os.path.join(HERE, "devbrain-verify-run")
 

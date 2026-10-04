@@ -9,13 +9,14 @@ set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/lib/queue.sh"
+source "$ROOT/lib/config.sh"
 source "$ROOT/lib/day.sh"
 
 WIKI_DIR="${DEVBRAIN_WIKI_DIR:-$HOME/dev/wiki}"
 BACKLOG="$WIKI_DIR/projects/mejoras-propuestas.md"
 DAY_ENGINE="${DAY_ENGINE:-$ROOT/lib/day_engine.py}"
 export DAY_ENGINE
-export RESEARCH_ALLOWFILE="${RESEARCH_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
+export RESEARCH_ALLOWFILE="${RESEARCH_ALLOWFILE:-$(config_path devbrain-projects.allow)}"
 
 if [ ! -f "$BACKLOG" ]; then
   echo "No backlog yet ($BACKLOG). Nothing to decide."

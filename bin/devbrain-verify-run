@@ -29,12 +29,14 @@ USAGE
                                               (used by devbrain-preflight)
 """
 import json, os, re, shlex, subprocess, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from config_path import config_path  # noqa: E402
 
 # Same defaults as bin/devbrain: this checkout's own verify file, and ~/dev/projects.
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECTS = os.environ.get("DEVBRAIN_PROJECTS_DIR", os.path.expanduser("~/dev/projects"))
-VERIFY_FILE = os.environ.get("DEVBRAIN_VERIFY_COMMANDS_FILE",
-                             os.path.join(os.path.dirname(HERE), "devbrain-verify.commands"))
+VERIFY_FILE = os.environ.get("DEVBRAIN_VERIFY_COMMANDS_FILE") or config_path(
+    "devbrain-verify.commands", os.path.dirname(HERE))
 REPO_OK = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
