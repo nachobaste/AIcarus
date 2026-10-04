@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/test-devbrain-wiki-lint-fallback.sh — static check that devbrain-wiki-lint is
-# actually wired to the fallback (plan 260), not just that lib/telegram.sh has it.
+# actually wired to the fallback, not just that lib/telegram.sh has it.
 #
 # A live end-to-end run of devbrain-wiki-lint would need to stub `claude` too — it is
 # invoked bare, with no override, and out of this plan's scope ("no convertirla en una

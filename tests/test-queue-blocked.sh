@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/test-queue-blocked.sh — queue_blocked_command, the pure detector behind the
-# 'blocked' status (plan 290, D4/D5 of docs/superpowers/specs/
+# 'blocked' status (D4/D5 of docs/superpowers/specs/
 # 2026-08-07-devbrain-verify-commands-design.md).
 #
 # A session that hits a permission it does not have writes .devbrain/blocked-by.txt

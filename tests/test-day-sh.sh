@@ -1,7 +1,7 @@
 #!/bin/bash
 # tests/test-day-sh.sh — lib/day.sh: the one place that turns an engine decision into a
 # written file and a git commit. Both bin/devbrain-day and the future Telegram approval
-# (plan 250) call day_apply(); this suite is what proves they cannot diverge, because
+# call day_apply(); this suite is what proves they cannot diverge, because
 # there is only one function here to diverge FROM.
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"

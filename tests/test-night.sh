@@ -75,7 +75,7 @@ grep -q "plan body for repoa" "$DEVBRAIN_PROJECTS_DIR/repoa/.devbrain/plan-lates
 # session-limit message → pause + retry (NOT failed); succeeds on second attempt
 [ "$(fm_get "$DEVBRAIN_QUEUE_DIR/70-quota--q.plan.md" status)" = "done" ] && echo "OK: session limit -> pause -> retry -> done" || { echo "FAIL: quota plan = $(fm_get "$DEVBRAIN_QUEUE_DIR/70-quota--q.plan.md" status)"; exit 1; }
 grep -q "quota limit" "$DEVBRAIN_QUEUE_DIR/night-report-latest.md" && echo "OK: report shows quota pause" || exit 1
-# ---- blocked (plan 290, D4/D5): a missing permission is 'blocked', not 'failed' --
+# ---- blocked: a missing permission is 'blocked', not 'failed' --
 mkplan "80-bloqueado--b.plan.md" bloqueado approved 1
 mkdir -p "$TMP/projects/bloqueado"
 bash "$DIR/bin/devbrain-night" >/dev/null 2>&1

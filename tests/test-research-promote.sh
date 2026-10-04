@@ -154,7 +154,7 @@ echo "OK: a cross-repo option is fine when something in the repo anchors it"
 
 # ---- DIGEST -----------------------------------------------------------------
 # What reaches the owner's phone at 6am: numbered, terse, and only what has not
-# already been decided on. The number is load-bearing — plan 250 lets the owner
+# already been decided on. The number is load-bearing: Telegram approval ("dale N") lets the owner
 # reply "dale 2" from Telegram, so it must stay stable and exact, never reworded.
 
 dig() { python3 "$BIN" digest; }
@@ -186,7 +186,7 @@ finding "Just a finding" "src/one.js:1" "something" "1 night" | dig > "$TMP/out"
 [ ! -s "$TMP/out" ] || fail "a backlog with findings but no proposals produced digest output"
 echo "OK: nothing to decide means nothing is printed, never invented"
 
-# 16. a proposal already decided (by devbrain-day / Telegram, plan 240/250) is not repeated
+# 16. a proposal already decided (by devbrain-day or Telegram) is not repeated
 # The decision line format is the forward-compatible contract for those plans, not built yet.
 backlog_with_proposal "Finding B" "matters" "Already decided" "- decision: approved" \
   | dig > "$TMP/out" 2>/dev/null
@@ -216,7 +216,7 @@ echo "OK: proposals beyond the cap are reported, not hidden"
 
 # ---- AGE (2026-08-12): the "## Proposals — YYYY-MM-DD" heading is a real date,
 # already written when a finding is promoted — not a proxy like Bloqueadas' mtime.
-# Age must not touch the numbered title line (plan 250's "dale N"), so it is folded
+# Age must not touch the numbered title line (the Telegram "dale N" reply), so it is folded
 # into the Effort line, which is why every assertion above about "exactly 3 lines"
 # and the exact title regex must keep passing unchanged (they do, re-run above).
 days_ago() { date -v-"$1"d +%Y-%m-%d 2>/dev/null || date -d "-$1 days" +%Y-%m-%d; }

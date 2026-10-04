@@ -174,7 +174,7 @@ def do_validate(source=None):
 
 
 # --- digest: what reaches the operator's phone at 6am --------------------------
-# The number in front of each proposal is load-bearing: plan 250 lets the operator
+# The number in front of each proposal is load-bearing: Telegram approval ("dale N") lets the operator
 # reply "dale 2" from Telegram. It must stay exact and stable, so this NEVER goes through
 # the AI summarizer that writes the rest of the digest — a model asked to
 # "summarize" would feel free to reword or drop it.
@@ -243,7 +243,7 @@ def do_digest():
         print(f"   {_one_line(why)}")
         # Age is appended to the Effort line, not a line of its own: the digest
         # format is a load-bearing 3-lines-per-proposal contract (see
-        # tests/test-research-promote.sh) that plan 250's "dale N" reply depends
+        # tests/test-research-promote.sh) that the Telegram "dale N" reply depends
         # on staying stable — a 4th line would change nothing about the numbering,
         # but there is no reason to risk it.
         line = f"Effort: {p['effort']}"

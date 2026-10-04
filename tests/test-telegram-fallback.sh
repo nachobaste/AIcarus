@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/test-telegram-fallback.sh — lib/telegram.sh's honest-delivery send and the
-# gateway-down fallback (plan 260).
+# gateway-down fallback.
 #
 # tg_send() (already in this file) always returns 0, by design — it is for best-effort
 # alerts where losing one silently is acceptable. The digest and wiki-lint's weekly
