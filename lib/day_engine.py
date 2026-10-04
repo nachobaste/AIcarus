@@ -105,13 +105,16 @@ def cmd_show(title):
 
 def is_self_repo(repo, allowfile):
     """Is `repo` this devbrain installation's own repo (the same directory that
-    devbrain-projects.allow lives in), rather than a project it manages? Structural
-    check, not a hardcoded name — it works no matter what you called your checkout.
-    devbrain-projects.excluded should also list this repo explicitly with a reason,
-    but this check protects `render` even if someone forgets that line."""
+    devbrain-projects.allow lives in, or the parent of its config/ directory), rather
+    than a project it manages? Structural check, not a hardcoded name — it works no
+    matter what you called your checkout. devbrain-projects.excluded should also list
+    this repo explicitly with a reason, but this check protects `render` even if
+    someone forgets that line."""
     if not allowfile:
         return False
     root = os.path.dirname(os.path.abspath(allowfile))
+    if os.path.basename(root) == "config":
+        root = os.path.dirname(root)
     return repo == os.path.basename(root)
 
 

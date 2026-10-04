@@ -30,4 +30,4 @@ done
 echo "$n skill(s) linked into $DEST"
 echo
 echo "Verify Claude Code actually loads them — presence is not loading:"
-echo "  printf 'List the names of the available skills.\\n' | claude -p --model sonnet"
+echo "  printf 'List the names of the available skills.\\n' | claude -p --model claude-sonnet-5-5"

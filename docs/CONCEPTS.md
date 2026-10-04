@@ -105,10 +105,10 @@ An unattended session verifies its own work with the commands you declared in
 
 ## The "deliberate act" config-file convention
 
-Six plain-text files at the repo root — `devbrain-projects.allow`,
+Five plain-text files in `config/` — `devbrain-projects.allow`,
 `devbrain-projects.excluded`, `devbrain-base-branch.override`,
-`devbrain-verify.commands`, `devbrain-migration-block.list`, and (optionally)
-`devbrain-classify.tiers` — all ship empty except comments, and all follow the
+`devbrain-verify.commands`, `devbrain-migration-block.list` — and (optionally)
+`devbrain-classify.tiers` at the repo root all ship empty except comments, and all follow the
 same rule: **adding a line is a deliberate act you take, not a default the
 system assumes for you.** The reasoning is spelled out inline in each file
 (read them, they're short), but the pattern itself is worth naming: every one of
@@ -119,6 +119,48 @@ making it for you. If you're adding a new capability that needs its own
 allowlist, extend one of these (or add a new file following the identical
 "empty by default, one line per deliberate decision, format documented in the
 file's own header comment" shape) rather than inventing a different mechanism.
+
+`DEVBRAIN_CONFIG_DIR` points every script at a different directory than `config/`.
+A variable that names one file (`DEVBRAIN_ALLOWFILE`, `RESEARCH_ALLOWFILE`,
+`DEVBRAIN_VERIFY_COMMANDS_FILE`, ...) still wins over the directory.
+
+## Choosing models
+
+`config/models.conf` sets the model and effort for each role that calls Claude Code.
+It ships fully commented: the values shown are the defaults.
+
+| Role | Script | Default model | Default effort |
+|---|---|---|---|
+| `plan` | `bin/devbrain plan` | `claude-opus-5-5` | `high` |
+| `execute` | `bin/devbrain execute` (implementation) | `claude-sonnet-5-5` | `medium` |
+| `review` | `bin/devbrain execute` (adversarial reviewer) | same as `plan` | same as `plan` |
+| `research` | `bin/devbrain-research` (findings and promote) | `claude-opus-5-5` | none |
+| `interview` | `bin/devbrain-interview` | `claude-opus-5-5` | none |
+| `digest` | `bin/devbrain-digest` | none | none |
+| `wikilint` | `bin/devbrain-wiki-lint` | none | none |
+
+"None" means no flag is passed, so Claude Code's own default applies. The format is
+`role=model` and `role.effort=level` (`low`, `medium`, `high`, `xhigh` or `max`).
+Use exact model IDs rather than aliases such as `opus`: an alias follows whatever
+the newest model is, so it can change under you.
+
+For each value, the first one set wins:
+
+1. `DEVBRAIN_MODEL_<ROLE>` / `DEVBRAIN_EFFORT_<ROLE>` in the environment.
+2. `DEVBRAIN_PLAN_MODEL` / `DEVBRAIN_PLAN_EFFORT` (plan) and `DEVBRAIN_EXEC_MODEL` /
+   `DEVBRAIN_EXEC_EFFORT` (execute), the variables from before this file existed.
+3. `config/models.conf`, or the file `DEVBRAIN_MODELS_FILE` names.
+4. For `review` only, the value `plan` ends up with.
+5. The default in the table.
+
+`lib/models.sh` resolves this. Only `--model` and `--effort` come from it. A value
+that starts with `-`, has spaces or uses characters outside `[A-Za-z0-9._:/-]`, or
+an effort outside the list, is rejected and that call does not run. Permission
+modes, allowed and disallowed tools, and timeouts stay written at each call site and
+are never configurable: swapping the model must not widen what the agent may do.
+
+The Telegram router is not one of these roles. It runs inside OpenClaw, which picks
+its model (`openclaw models set <provider/model>`).
 
 ## The four-tier data classification (`lib/classify.sh`)
 
@@ -203,9 +245,9 @@ different one:
 | `lib/day.sh` | `DAY_ENGINE` | `~/dev/devbrain/lib/day_engine.py` |
 | `lib/classify.sh` | `CLASSIFY_TIERS_FILE` | `~/dev/devbrain/devbrain-classify.tiers` |
 | `lib/classify.sh` | `NOTION_REDACT_BIN` | `~/dev/devbrain/bin/notion-redact.py` |
-| `bin/devbrain-repo-audit` | `REPO_AUDIT_ALLOWFILE`, `REPO_AUDIT_EXCLUDEFILE` | `~/dev/devbrain/devbrain-projects.{allow,excluded}` |
-| `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE`, `WIKI_STATUS_AUDIT_SCRAPERS_TSV` | `~/dev/devbrain/devbrain-projects.allow`, `~/dev/devbrain/scrapers.tsv` |
-| `bin/devbrain-stacked-pr-check` | `STACKED_PR_ALLOWFILE`, `STACKED_PR_BASE_OVERRIDE` | `~/dev/devbrain/devbrain-projects.allow`, `~/dev/devbrain/devbrain-base-branch.override` |
+| `bin/devbrain-repo-audit` | `REPO_AUDIT_ALLOWFILE`, `REPO_AUDIT_EXCLUDEFILE` | `~/dev/devbrain/config/devbrain-projects.{allow,excluded}` |
+| `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE`, `WIKI_STATUS_AUDIT_SCRAPERS_TSV` | `~/dev/devbrain/config/devbrain-projects.allow`, `~/dev/devbrain/scrapers.tsv` |
+| `bin/devbrain-stacked-pr-check` | `STACKED_PR_ALLOWFILE`, `STACKED_PR_BASE_OVERRIDE` | `~/dev/devbrain/config/devbrain-projects.allow`, `~/dev/devbrain/config/devbrain-base-branch.override` |
 | `bin/devbrain-drift` | `DRIFT_SNAPSHOT`, `DRIFT_SKILLS` | `~/dev/devbrain/openclaw/workspace`, `~/dev/devbrain/claude/skills` |
 | `openclaw/exec-approvals.json` | (not env-driven — edit the file) | placeholder paths, must be edited to your actual clone path regardless of what you name it |
 

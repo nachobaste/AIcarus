@@ -14,7 +14,7 @@
 - **Their goal:** <what this automation is FOR, in one line — e.g. "free up time
   from repetitive dev work" or "let me ship small fixes without opening a laptop">.
 - Projects enabled for `devbrain` (allowlist): keep this in sync with
-  `devbrain-projects.allow` at the root of this repo.
+  `config/devbrain-projects.allow` in this repo.
 - Any project you've marked production-sensitive: note it here explicitly, e.g.
   "**`<repo>` is PRODUCTION** with real users. PRs go to the `develop` branch
   (never `main`), devbrain doesn't touch migrations there, and there's automatic

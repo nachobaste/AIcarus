@@ -32,7 +32,7 @@ day_apply() { # <title> dale|no [reason] [option A|B] -> writes/commits, prints 
       local rendered rc repo slug body nn f
       local -a render_args=("render" "$title")
       [ -n "$option" ] && render_args+=("--option" "$option")
-      rendered="$(RESEARCH_ALLOWFILE="${RESEARCH_ALLOWFILE:-$(cd "$(dirname "$DAY_ENGINE")/.." && pwd)/devbrain-projects.allow}" \
+      rendered="$(RESEARCH_ALLOWFILE="${RESEARCH_ALLOWFILE:-$(config_path devbrain-projects.allow "$(cd "$(dirname "$DAY_ENGINE")/.." && pwd)")}" \
                   python3 "$DAY_ENGINE" "${render_args[@]}" < "$backlog")"
       rc=$?
       if [ $rc -ne 0 ]; then

@@ -36,13 +36,18 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/lib/queue.sh"     # with_timeout
+source "$ROOT/lib/config.sh"    # config_path
+source "$ROOT/lib/models.sh"    # models_resolve
 
 PROJECTS_DIR="${RESEARCH_PROJECTS_DIR:-$HOME/dev/projects}"
-ALLOWFILE="${RESEARCH_ALLOWFILE:-$ROOT/devbrain-projects.allow}"
+ALLOWFILE="${RESEARCH_ALLOWFILE:-$(config_path devbrain-projects.allow)}"
 WIKI="${RESEARCH_WIKI:-$HOME/dev/wiki}"
 BACKLOG="${RESEARCH_BACKLOG:-$WIKI/projects/mejoras-propuestas.md}"
 LOG="${RESEARCH_LOG:-$HOME/.openclaw/logs/research.log}"
 CLAUDE_BIN="${RESEARCH_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
+# One role for both passes (findings and promote). A rejected value stops the run
+# before any session (config/models.conf, lib/models.sh).
+models_resolve research claude-opus-5-5 "" || exit 2
 MAX="${RESEARCH_MAX:-5}"
 
 STATE_DIR="${RESEARCH_STATE_DIR:-$HOME/.openclaw/state}"
@@ -195,7 +200,7 @@ EXACT FORMAT, no text around it:
 - pros: <text>
 - cons: <text>
 PROMPTP
-    } | with_timeout 900 "$CLAUDE_BIN" -p --model opus --permission-mode plan \
+    } | with_timeout 900 "$CLAUDE_BIN" -p ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --permission-mode plan \
           --disallowedTools "$DISALLOWED" --allowedTools "$ALLOWED_READONLY" \
           > "$OUT" 2>>"$LOG"
 
@@ -262,14 +267,14 @@ REPO="${REPOS[0]}"
 # openclaw/exec-approvals.json — the limit on what an unattended agent may run —
 # so its exclusion must not depend on a line in a file staying absent, or on
 # matching one particular repo name that could change. Instead this checks
-# structurally: devbrain-projects.allow only ever lives at the root of the
-# devbrain installation itself, never inside a project devbrain manages, so a
-# project directory that contains that file at its own root IS the installation,
-# by construction. See wiki/lessons/machine-config-nunca-nocturno.md.
+# structurally: devbrain-projects.allow only ever lives in the config/ directory of
+# the devbrain installation itself (at its root, before config/ existed), never
+# inside a project devbrain manages, so a project directory that contains that file
+# there IS the installation, by construction. See wiki/lessons/machine-config-nunca-nocturno.md.
 ROOTS=""
 for R in "${REPOS[@]}"; do
   PDIR="$PROJECTS_DIR/$R"
-  if [ -f "$PDIR/devbrain-projects.allow" ]; then
+  if [ -f "$PDIR/config/devbrain-projects.allow" ] || [ -f "$PDIR/devbrain-projects.allow" ]; then
     echo "ERROR: $R is the devbrain installation itself — never investigated unattended (interactive-only)."
     echo "       See wiki/lessons/machine-config-nunca-nocturno.md"
     log "refused $R (is the devbrain installation itself)"
@@ -406,7 +411,7 @@ Current status board for this repo:
 $STATUS_TEXT
 PROMPT
 fi
-} | with_timeout 900 "$CLAUDE_BIN" -p --model opus --permission-mode plan \
+} | with_timeout 900 "$CLAUDE_BIN" -p ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --permission-mode plan \
       --disallowedTools "$DISALLOWED" \
       --allowedTools "$ALLOWED_READONLY" \
       > "$RAW" 2>>"$LOG"

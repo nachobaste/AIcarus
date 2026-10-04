@@ -14,6 +14,7 @@ TG_ID="$DEVBRAIN_TG_CHAT_ID"
 LOG="$HOME/.openclaw/logs/wiki-lint.log"
 OPENCLAW_BIN="${DEVBRAIN_WIKI_LINT_OPENCLAW_BIN:-openclaw}"
 source "$(cd "$(dirname "$0")/.." && pwd)/lib/telegram.sh"   # tg_send_with_fallback
+source "$(cd "$(dirname "$0")/.." && pwd)/lib/models.sh"     # models_resolve
 echo "[$(date)] wiki-lint start" >> "$LOG"
 cd "$WIKI" || exit 1
 
@@ -26,7 +27,11 @@ BROKEN="$("$LINKCHECK" "$WIKI" 2>&1)"
 echo "[$(date)] wiki-lint linkcheck: $(printf '%s' "$BROKEN" | head -2 | tr '\n' ' ')" >> "$LOG"
 
 CLAUDE_BIN="${DEVBRAIN_WIKI_LINT_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
-SUMMARY=$("$CLAUDE_BIN" -p --permission-mode acceptEdits \
+# No --model by default (Claude Code's own); config/models.conf can set one. A rejected
+# value skips the session, and the weekly message says why.
+SUMMARY="model config rejected, lint skipped (see $LOG)"
+models_resolve wikilint "" "" 2>>"$LOG" && \
+SUMMARY=$("$CLAUDE_BIN" -p ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} --permission-mode acceptEdits \
   --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*)" \
   "You are the maintainer of this wiki (~/dev/wiki). Read SCHEMA.md for the rules. Do a LINT:
 1) Look for contradictions between pages, stale data, and orphaned pages (no links to them).

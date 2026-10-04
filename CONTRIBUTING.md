@@ -73,6 +73,17 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   mechanical rule that came out of it. Not marketing copy, not hedge-everything
   disclaimers.
 
+## Choosing models
+
+Every Claude Code call has a role and gets its model and effort from
+`models_resolve <role> <default-model> <default-effort>` in `lib/models.sh`, which
+reads `config/models.conf` (precedence and roles: `docs/CONCEPTS.md#choosing-models`).
+If you add a call, give it a role, add a commented line for it to
+`config/models.conf`, and add it to `tests/test-models.sh`. Keep its permission
+mode, tool lists and timeout literal at the call site: they are never configurable.
+If a call's default argv changes on purpose, re-record the fixture with
+`bash tests/test-models.sh --record` and say so in the PR.
+
 ## Running the tests
 
 ```bash

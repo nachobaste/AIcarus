@@ -14,6 +14,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 ROOT_LIB="$(cd "$(dirname "$0")/.." && pwd)/lib"
 source "$ROOT_LIB/telegram.sh"   # tg_send_with_fallback
 source "$ROOT_LIB/queue.sh"      # fm_get (reading status: blocked)
+source "$ROOT_LIB/models.sh"     # models_resolve (no --model by default)
 # Overridable so this script can be tested without ever calling out to the real
 # tools — otherwise `export PATH=...` two lines up defeats a PATH-prepend trick,
 # and a test that forgets this reaches the real messaging bridge and sends a live
@@ -140,7 +141,11 @@ if [ -z "$ACTIVITY" ] && [ -z "$PRS" ] && [ -z "$NIGHT" ] && [ -z "$AUDIT" ] && 
   MSG="☀️ Good morning. No code changes in the last 24h. All quiet."
 else
   CONTEXT="Night report:\n${NIGHT:-(did not run)}\n\nGit activity last 24h:${ACTIVITY:-\n(none)}\n\nOpen PRs waiting on your review:\n${PRS:-  (none)}\n\nStatus board:\n${BOARD:-(empty)}\n\nWiki changes (24h):\n${WIKIDIFF:-(none)}\n\nMessaging-bridge agent actions in 24h (metadata):\n${AUDIT:-(none)}"
-  MSG=$(printf '%s' "$CONTEXT" | "$CLAUDE_BIN" -p \
+  # No --model by default (Claude Code's own). A rejected model config skips the call
+  # and falls into the "generator failed" line below; the reason goes to the log.
+  MSG=""
+  models_resolve digest "" "" 2>>"$LOG" && \
+  MSG=$(printf '%s' "$CONTEXT" | "$CLAUDE_BIN" -p ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
     "You are the user's assistant. With this raw data, write a BRIEF morning summary
 to read on a phone (max 160 words). Start with '☀️ Summary'.
 Structure: 1) what the night accomplished (PRs ready, failures), 2) what's waiting
