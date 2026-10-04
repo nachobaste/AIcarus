@@ -48,26 +48,60 @@ def fold(name):
     return "".join(c for c in stripped if not unicodedata.combining(c))
 
 
-def parse_findings(text):
-    """Pull '### title' blocks out of the model's output, ignoring its prose."""
-    findings, current = [], None
+KEY_LINE = re.compile(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$")
+PROPOSALS_HEADING = re.compile(r"^##\s*Proposals\s*[—-]\s*(\d{4}-\d{2}-\d{2})")
+
+
+def parse_blocks(text):
+    """The one parser for the backlog format, shared by research_promote and
+    day_engine. Every '### title' block becomes:
+
+      meta     folded '- key: value' lines of the block (a key before the
+               first '#### ' option wins over the same key inside one)
+      options  [{name, files, raw}] in order, 'files' from each option's
+               '- files:' line
+      raw      the block's lines verbatim, title line first
+      date     the nearest preceding '## Proposals — YYYY-MM-DD' heading, or None
+
+    Raw findings and promoted proposals share this shape; a proposal is a block
+    whose meta has 'source'.
+    """
+    blocks, cur, date = [], None, None
     for raw in text.splitlines():
         line = raw.rstrip()
+        heading = PROPOSALS_HEADING.match(line)
+        if heading:
+            date = heading.group(1)
         if line.startswith("### "):
-            if current:
-                findings.append(current)
-            current = {"title": line[4:].strip()}
+            cur = {"title": line[4:].strip(), "meta": {}, "options": [], "raw": [raw],
+                   "date": date}
+            blocks.append(cur)
             continue
-        if current is None:
+        if cur is None:
             continue
-        m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", line)
-        if m:
-            key = fold(m.group(1))
-            if key in FIELDS:
-                current[key] = m.group(2).strip()
-    if current:
-        findings.append(current)
-    return findings
+        cur["raw"].append(raw)
+        if line.startswith("#### "):
+            cur["options"].append({"name": line[5:].strip(), "files": set(), "raw": [raw]})
+            continue
+        m = KEY_LINE.match(line)
+        if cur["options"]:
+            opt = cur["options"][-1]
+            opt["raw"].append(raw)
+            if m and fold(m.group(1)) == "files":
+                opt["files"] = {p.strip().strip("`") for p in m.group(2).split(",") if p.strip()}
+            elif m:
+                # A key after the options (a '- decision:' appended at the end)
+                # still belongs to the block; one before the options wins.
+                cur["meta"].setdefault(fold(m.group(1)), m.group(2).strip())
+        elif m:
+            cur["meta"][fold(m.group(1))] = m.group(2).strip()
+    return blocks
+
+
+def parse_findings(text):
+    """Pull '### title' blocks out of the model's output, ignoring its prose."""
+    return [dict({"title": b["title"]}, **{k: v for k, v in b["meta"].items() if k in FIELDS})
+            for b in parse_blocks(text)]
 
 
 def citation_resolves(citation, root):

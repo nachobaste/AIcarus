@@ -29,7 +29,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from research_filter import fold  # noqa: E402
+from research_filter import parse_blocks  # noqa: E402
 
 SLUG_MAX = 48
 
@@ -43,38 +43,9 @@ def slugify(text):
 
 
 def parse_backlog(text):
-    """Every '### ' block that carries a '- source:' line — the same marker
-    research_promote uses to tell a proposal apart from a raw finding, which shares
-    the same '### title' heading. Each block keeps its raw lines (for `show` and for
-    splicing in `mark`) and its options in order, each with its own raw lines (for
-    `render`, which needs an option's pros/cons verbatim, not just its files)."""
-    blocks, cur = [], None
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        if line.startswith("### "):
-            if cur:
-                blocks.append(cur)
-            cur = {"title": line[4:].strip(), "meta": {}, "options": [], "raw": [raw]}
-            continue
-        if cur is None:
-            continue
-        cur["raw"].append(raw)
-        if line.startswith("#### "):
-            cur["options"].append({"name": line[5:].strip(), "files": set(), "raw": [raw]})
-            continue
-        if cur["options"]:
-            opt = cur["options"][-1]
-            opt["raw"].append(raw)
-            m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", line)
-            if m and fold(m.group(1)) == "files":
-                opt["files"] = {p.strip().strip("`") for p in m.group(2).split(",") if p.strip()}
-            continue
-        m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", line)
-        if m:
-            cur["meta"][fold(m.group(1))] = m.group(2).strip()
-    if cur:
-        blocks.append(cur)
-    return [b for b in blocks if "source" in b["meta"]]
+    """Every proposal block (one carrying '- source:'); raw findings share the
+    '### title' heading but have no source. See research_filter.parse_blocks."""
+    return [b for b in parse_blocks(text) if "source" in b["meta"]]
 
 
 def pending(blocks):

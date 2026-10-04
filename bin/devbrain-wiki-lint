@@ -50,13 +50,22 @@ At the end, reply in English, 1-3 lines, on what you found and fixed." 2>>"$LOG"
 
 git push -q 2>>"$LOG" || true   # push the lint's commit
 
+# check <count-prefix> <ok-text> <what> <cmd...>: runs a checker ONCE. Exit 0
+# prints <ok-text>; anything else logs the full report and prints its count.
+check() {
+  local pfx="$1" ok="$2" what="$3" out
+  shift 3
+  if out="$("$@" 2>&1)"; then
+    echo "$ok"
+  else
+    { echo "[$(date)] wiki-lint $pfx:"; printf '%s\n' "$out"; } >> "$LOG"
+    echo "⚠️ $(printf '%s\n' "$out" | sed -n "s/^$pfx: //p") $what"
+  fi
+}
+
 # Verify the repair actually landed. Trusting the model's own summary here is
 # the same mistake this script exists to stop.
-if "$LINKCHECK" --quiet "$WIKI"; then
-  LINKS="links OK"
-else
-  LINKS="⚠️ $("$LINKCHECK" "$WIKI" | sed -n 's/^unresolved: //p') broken link(s) remain"
-fi
+LINKS="$(check unresolved "links OK" "broken link(s) remain" "$LINKCHECK" "$WIKI")"
 
 # Drift between stores, and orphaned stacked-PR merges, are reported, never
 # repaired here: fixing either means writing to machine-config (drift) or to
@@ -65,13 +74,7 @@ fi
 # That is also why neither report is handed to the model above the way broken
 # links are.
 DRIFTCHECK="$(cd "$(dirname "$0")" && pwd)/devbrain-drift"
-if "$DRIFTCHECK" --quiet; then
-  DRIFT="no drift"
-else
-  DRIFT="⚠️ $("$DRIFTCHECK" | sed -n 's/^drift: //p') drift between stores"
-  echo "[$(date)] wiki-lint drift:" >> "$LOG"
-  "$DRIFTCHECK" >> "$LOG" 2>&1
-fi
+DRIFT="$(check drift "no drift" "drift between stores" "$DRIFTCHECK")"
 
 # Stacked PRs that came back MERGED on GitHub but never actually reached the
 # real base branch (see wiki/lessons/pr-apilado-mergeado-nunca-llega-a-main.md,
@@ -79,28 +82,16 @@ fi
 # it's a different category -- git-remote state, not knowledge stores -- which
 # is why it lives in its own script instead of being a fifth devbrain-drift check.
 STACKEDCHECK="$(cd "$(dirname "$0")" && pwd)/devbrain-stacked-pr-check"
-if "$STACKEDCHECK" --quiet; then
-  STACKED="no orphaned stacked PRs"
-else
-  STACKED="⚠️ $("$STACKEDCHECK" | sed -n 's/^stacked-pr: //p') orphaned stacked PR(s)"
-  echo "[$(date)] wiki-lint stacked-pr:" >> "$LOG"
-  "$STACKEDCHECK" >> "$LOG" 2>&1
-fi
+STACKED="$(check stacked-pr "no orphaned stacked PRs" "orphaned stacked PR(s)" "$STACKEDCHECK")"
 
-# Claims in wiki/status/*.md and wiki/services/*.md ("PR #99 not yet merged",
-# "<job>: pending") that no longer match live GitHub -- the drift that bit
+# Claims in wiki/status/*.md and wiki/services/*.md ("PR #99 not yet merged")
+# that no longer match live GitHub -- the drift that bit
 # <project-a>.md, <project-b>.md and automations.md for days to weeks in the
 # same week. Same contract and same reason it's reported, not repaired here,
 # as DRIFT and STACKED above: fixing wiki wording needs judgement about what
 # to say, not just a state flip.
 STATUSCHECK="$(cd "$(dirname "$0")" && pwd)/devbrain-wiki-status-audit"
-if "$STATUSCHECK" --quiet; then
-  STALE="no outdated claims"
-else
-  STALE="⚠️ $("$STATUSCHECK" | sed -n 's/^wiki-status-audit: //p') outdated claim(s)"
-  echo "[$(date)] wiki-lint wiki-status-audit:" >> "$LOG"
-  "$STATUSCHECK" >> "$LOG" 2>&1
-fi
+STALE="$(check wiki-status-audit "no outdated claims" "outdated claim(s)" "$STATUSCHECK")"
 
 echo "[$(date)] wiki-lint done ($LINKS · $DRIFT · $STACKED · $STALE): $SUMMARY" >> "$LOG"
 # Same gap the digest had: this only runs weekly, so a silent gateway

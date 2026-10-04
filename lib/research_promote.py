@@ -37,7 +37,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from research_filter import fold, parse_findings  # noqa: E402
+from research_filter import fold, parse_blocks, parse_findings, render  # noqa: E402
 
 # --- the selection criteria, in the open -------------------------------------
 # Order matters and reflects the plan: first what unblocks other work, then what
@@ -85,9 +85,7 @@ def already_promoted(text):
     Without this the same proposal reaches the operator every night until they act on it,
     which trains him to ignore the section.
     """
-    return {ln.split(":", 1)[1].strip()
-            for ln in text.splitlines()
-            if fold(ln.strip().lstrip("- ").split(":", 1)[0]) == "source" and ":" in ln}
+    return {b["meta"]["source"] for b in parse_blocks(text) if "source" in b["meta"]}
 
 
 def do_select():
@@ -108,8 +106,7 @@ def do_select():
     chosen = [f for _, f in ordered[:cap]]
 
     for f in chosen:
-        print(f"### {f['title']}\n- repo: {f['repo']}\n- evidence: {f['evidence']}\n"
-              f"- why: {f['why']}\n- size: {f['size']}\n")
+        print(render(f))
 
     if not chosen:
         print("nothing to promote", file=sys.stderr)
@@ -119,36 +116,12 @@ def do_select():
 
 
 # --- validation ---------------------------------------------------------------
-def parse_proposals(text):
-    props, cur, opt = [], None, None
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        if line.startswith("### "):
-            if cur:
-                props.append(cur)
-            cur, opt = {"title": line[4:].strip(), "options": [], "body": []}, None
-            continue
-        if cur is None:
-            continue
-        cur["body"].append(raw)
-        if line.startswith("#### "):
-            opt = {"name": line[5:].strip(), "files": set()}
-            cur["options"].append(opt)
-            continue
-        m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", line)
-        if m and fold(m.group(1)) == "files" and opt is not None:
-            opt["files"] = {p.strip().strip("`") for p in m.group(2).split(",") if p.strip()}
-    if cur:
-        props.append(cur)
-    return props
-
-
 def do_validate(source=None):
     root = os.environ.get("RESEARCH_REPO_ROOT", "")
     kept, dropped = [], {"insufficient-options": 0, "identical-options": 0,
                          "no-anchor": 0}
 
-    for p in parse_proposals(sys.stdin.read()):
+    for p in parse_blocks(sys.stdin.read()):
         options = [o for o in p["options"] if o["files"]]
         if len(options) < 2:
             dropped["insufficient-options"] += 1
@@ -185,7 +158,7 @@ def do_validate(source=None):
             # Written here, never taken from the model. A misattributed proposal would
             # mark the wrong finding as promoted and the real one would return nightly.
             print(f"- source: {source}")
-        body = [ln for ln in p["body"] if fold(ln.strip().lstrip("- ").split(":", 1)[0]) != "source"]
+        body = [ln for ln in p["raw"][1:] if fold(ln.strip().lstrip("- ").split(":", 1)[0]) != "source"]
         text = "\n".join(body).strip()
         # Mark what does not exist yet, so the operator reads "this creates a file" instead of
         # assuming every path named is already there.
@@ -212,7 +185,6 @@ DIGEST_LINE_CAP = 140
 # real date, not a proxy. Every '### ' proposal block until the next such heading
 # was promoted on that date, so age here is exact, unlike Bloqueadas (see
 # queue_file_age_days in lib/queue.sh, whose mtime-based age IS a proxy).
-_PROPOSAL_HEADER_RE = re.compile(r"^##\s*Proposals\s*[—-]\s*(\d{4}-\d{2}-\d{2})")
 DEFAULT_STALE_DAYS = 3
 
 
@@ -242,46 +214,12 @@ def _days_waiting(date_iso):
 
 
 def _proposal_blocks(text):
-    """('title', 'source', body_lines, 'date') for every '### ' block that has
-    a '- source:' line — the one marker that distinguishes a promoted proposal
-    from a raw finding, both of which use the same '### title' heading. 'date'
-    is the date of the nearest preceding '## Proposals — YYYY-MM-DD' heading."""
-    blocks, cur = [], None
-    current_date = None
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        m_date = _PROPOSAL_HEADER_RE.match(line)
-        if m_date:
-            current_date = m_date.group(1)
-        if line.startswith("### "):
-            if cur:
-                blocks.append(cur)
-            cur = {"title": line[4:].strip(), "lines": [], "date": current_date}
-            continue
-        if cur is not None:
-            cur["lines"].append(line)
-    if cur:
-        blocks.append(cur)
-
-    out = []
-    for b in blocks:
-        source = effort = decided = None
-        for ln in b["lines"]:
-            m = re.match(r"^\s*-\s*([^:]+?)\s*:\s*(.*)$", ln)
-            if not m:
-                continue
-            key = fold(m.group(1))
-            if key == "source":
-                source = m.group(2).strip()
-            elif key == "effort":
-                effort = m.group(2).strip()
-            elif key == "decision":
-                decided = m.group(2).strip()
-        if source is not None:  # only proposals carry this line
-            out.append({"title": b["title"], "source": source,
-                        "effort": effort or "(not estimated)", "decided": decided,
-                        "date": b.get("date")})
-    return out
+    """Every promoted proposal (a block with '- source:'), with the date of its
+    '## Proposals — YYYY-MM-DD' heading."""
+    return [{"title": b["title"], "source": b["meta"]["source"],
+             "effort": b["meta"].get("effort") or "(not estimated)",
+             "decided": b["meta"].get("decision"), "date": b["date"]}
+            for b in parse_blocks(text) if "source" in b["meta"]]
 
 
 def _why_by_title(text):

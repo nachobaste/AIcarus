@@ -1,50 +1,9 @@
 #!/bin/bash
-# tests/test-classify.sh — exercises lib/classify.sh (the egress gate)
+# tests/test-redact.sh — exercises bin/notion-redact.py (the person-name redactor
+# devbrain-drift uses).
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "$DIR/lib/classify.sh"
-export NOTION_REDACT_BIN="$DIR/bin/notion-redact.py"
-
-# classify_tier by path
-[ "$(classify_tier "$HOME/dev/wiki/status/repoc.md")" = "interno-devbrain" ] \
-  && echo "OK: wiki status is interno-devbrain" || exit 1
-[ "$(classify_tier "$HOME/dev/personal/agenda.md")" = "personal" ] \
-  && echo "OK: personal dir is personal" || exit 1
-[ "$(classify_tier "/some/unknown/path.md")" = "business-confidential" ] \
-  && echo "OK: unknown paths fail closed to the strictest tier" || exit 1
-[ "$(classify_tier "$CLASSIFY_MEMORY/MEMORY.md")" = "interno-devbrain" ] \
-  && echo "OK: Claude memory is interno-devbrain" || exit 1
-# A repo under ~/dev/projects/ with no tier of its own (and no entry in the
-# optional CLASSIFY_TIERS_FILE) must still fall to the business-confidential
-# catch-all. An earlier audit found this passed by accident of case-statement
-# order, never as a deliberate decision. Asserting it explicitly here guards
-# against someone "fixing" the catch-all into something that leaks by default.
-[ "$(classify_tier "$HOME/dev/projects/algo-inventado/x")" = "business-confidential" ] \
-  && echo "OK: unclassified ~/dev/projects/ repo still falls to the deliberate catch-all" || exit 1
-
-# The optional CLASSIFY_TIERS_FILE lets a specific project override the
-# catch-all in either direction (looser -> publico, stricter -> personal).
-TIERS_TMP="$(mktemp -d)"
-export CLASSIFY_TIERS_FILE="$TIERS_TMP/tiers"
-printf '%s/dev/projects/an-open-source-repo=publico\n' "$HOME" > "$CLASSIFY_TIERS_FILE"
-[ "$(classify_tier "$HOME/dev/projects/an-open-source-repo/README.md")" = "publico" ] \
-  && echo "OK: CLASSIFY_TIERS_FILE overrides the catch-all for a listed prefix" || exit 1
-[ "$(classify_tier "$HOME/dev/projects/some-other-repo/x")" = "business-confidential" ] \
-  && echo "OK: a repo NOT listed in CLASSIFY_TIERS_FILE still falls to the catch-all" || exit 1
-unset CLASSIFY_TIERS_FILE
-rm -rf "$TIERS_TMP"
-
-# assert_egress_ok — the case that MUST pass
-assert_egress_ok "business-confidential" "notion" \
-  && echo "OK: business-confidential may reach private Notion" || exit 1
-assert_egress_ok "publico" "github" \
-  && echo "OK: publico may reach github" || exit 1
-
-# assert_egress_ok — the case that MUST fail
-assert_egress_ok "business-confidential" "github" 2>/dev/null
-[ $? -eq 2 ] && echo "OK: business-confidential is refused for github" || exit 1
-assert_egress_ok "personal" "notion" 2>/dev/null
-[ $? -eq 2 ] && echo "OK: personal is refused for notion" || exit 1
+redact_names() { python3 "$DIR/bin/notion-redact.py" --text; }
 
 # redact_names — the name list lives OUTSIDE this repo (see Global Constraints).
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -122,26 +81,5 @@ out="$(printf 'Compramos bananas para el analisis en Panama\n' | redact_names)"
 out="$(printf 'Firma Ana hoy\n' | redact_names)"
 case "$out" in *"[puesto]"*) echo "OK: the standalone name is still redacted" ;;
   *) echo "FAIL: word-boundary anchoring broke real redaction: $out"; exit 1 ;; esac
-
-# (9) JSON mode must redact values but never keys. A names list containing
-# "Sync" previously rewrote the property name "Sync Key".
-printf 'Sync\n' > "$CLASSIFY_NAMES_FILE"
-out="$(printf '{"Sync Key":"area:sgc:gp","Name":"Sync"}' | python3 "$NOTION_REDACT_BIN")"
-case "$out" in
-  *'"Sync Key"'*) echo "OK: JSON keys are untouched" ;;
-  *) echo "FAIL: a JSON key was rewritten: $out"; exit 1 ;;
-esac
-case "$out" in
-  *'"[puesto]"'*) echo "OK: JSON string values are redacted" ;;
-  *) echo "FAIL: JSON value not redacted: $out"; exit 1 ;;
-esac
-
-# (7) A missing redactor must NOT look like a missing names list.
-printf 'Fakesurname Uno\n' > "$CLASSIFY_NAMES_FILE"
-NOTION_REDACT_BIN=/nonexistent/notion-redact.py
-printf 'x\n' | redact_names >/dev/null 2>&1
-[ $? -eq 3 ] && echo "OK: missing redactor exits 3, not 2" \
-  || { echo "FAIL: missing redactor is indistinguishable from missing list"; exit 1; }
-NOTION_REDACT_BIN="$DIR/bin/notion-redact.py"
 
 echo "ALL OK"

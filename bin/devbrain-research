@@ -14,17 +14,14 @@
 # Design: ~/dev/queue/190-machine-config--devbrain-research-motor.plan.md
 # Spec:   ~/dev/wiki/projects/devbrain-nocturno.md
 #
-# Attention budget (set in a weekly interview): 50% internal gaps, 30% links
-# between projects, 20% external exploration. Spent by ROTATION ACROSS NIGHTS,
-# never split inside one run — three shallow sweeps in one session are worth less
-# than one good one.
+# Two scopes: internal gaps in one repo, or links between projects. The caller
+# (your scheduler) picks one per run, never both — two shallow sweeps in one
+# session are worth less than one good one.
 #
 # Usage:
 #     devbrain-research <repo>                   # scope internas/internal (default)
 #     devbrain-research --scope internas <repo>
 #     devbrain-research --scope conexiones       # picks its own repos, multi-repo
-#     devbrain-research --scope externo          # routed, and refuses: see below
-#     devbrain-research --next-bucket            # print+advance the budget, no model
 #
 # Exit codes:
 #     0  ran (findings may be zero — that is a legitimate outcome)
@@ -51,29 +48,10 @@ models_resolve research claude-opus-5-5 "" || exit 2
 MAX="${RESEARCH_MAX:-5}"
 
 STATE_DIR="${RESEARCH_STATE_DIR:-$HOME/.openclaw/state}"
-BUDGET_FILE="$STATE_DIR/research-budget"
 ROTATION_FILE="$STATE_DIR/research-rotation"
 CONEXIONES_MAX_REPOS="${RESEARCH_MAX_REPOS:-3}"
 
-# The 50/30/20 budget as an explicit 10-slot cycle rather than a random draw.
-# Deterministic means the distribution is a fact the tests can assert exactly,
-# instead of a statistical claim that passes four times out of five. Spread, not
-# clustered, so a week never spends three connection nights back to back.
-BUCKET_CYCLE=(internas conexiones internas externo internas
-              conexiones internas internas conexiones externo)
-
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
-
-# Reads the counter, prints this run's bucket, advances. Absent or corrupt state
-# starts at 0 — the budget going wrong must never be what stops a night.
-next_bucket() {
-  mkdir -p "$STATE_DIR" 2>/dev/null
-  local i=0
-  [ -f "$BUDGET_FILE" ] && i="$(tr -cd '0-9' < "$BUDGET_FILE" 2>/dev/null)"
-  [ -n "$i" ] || i=0
-  echo "${BUCKET_CYCLE[$((i % ${#BUCKET_CYCLE[@]}))]}"
-  echo $(((i + 1) % ${#BUCKET_CYCLE[@]})) > "$BUDGET_FILE" 2>/dev/null || true
-}
 
 # Rotates through the allowlist so connection nights do not always read the same
 # three repos. Reading every repo at once inflates context and degrades findings,
@@ -114,7 +92,6 @@ REPO=""
 PROMOTE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --next-bucket) next_bucket; exit 0 ;;
     --promote) PROMOTE=1; shift ;;
     --scope) SCOPE="${2:-}"; shift 2 || true ;;
     -*) echo "ERROR: unknown option: $1"; exit 2 ;;
@@ -123,20 +100,9 @@ while [ $# -gt 0 ]; do
 done
 
 case "$SCOPE" in
-  internas|conexiones|externo) ;;
-  *) echo "ERROR: invalid scope: '$SCOPE' (internas|conexiones|externo)"; exit 2 ;;
+  internas|conexiones) ;;
+  *) echo "ERROR: invalid scope: '$SCOPE' (internas|conexiones)"; exit 2 ;;
 esac
-
-# The external bucket is ROUTED but REFUSES to run. It needs WebSearch/WebFetch,
-# and enabling network access in an unattended session is the same class of
-# decision already scoped in a prior planning session (plan 180) — it gets its
-# own discussion, not a quiet arrival inside this one. Deliberately no network
-# tool anywhere on this path.
-if [ "$SCOPE" = "externo" ]; then
-  echo "the externo bucket is pending a permissions decision (no network access)"
-  log "externo: skipped — pending a network-permissions decision"
-  exit 0
-fi
 
 # --- promotion: raw backlog -> the 2-3 proposals the owner actually decides on --
 # Runs on what is already written down; it never searches for new findings. The
@@ -233,7 +199,7 @@ PROMPTP
 fi
 
 if [ "$SCOPE" = "internas" ] && [ -z "$REPO" ]; then
-  echo "usage: devbrain-research <repo> | --scope conexiones | --scope externo"
+  echo "usage: devbrain-research <repo> | --scope conexiones"
   exit 2
 fi
 
@@ -388,8 +354,8 @@ HARD RULES:
    that doesn't resolve discards the whole finding. Don't guess line numbers: open
    the file and look.
 2. Don't propose building things that already exist. In particular,
-   \`devbrain-drift\` (drift between knowledge stores), \`wiki-linkcheck\`
-   (wiki links), and \`notion-sync-check\` already exist. If you spot something
+   \`devbrain-drift\` (drift between knowledge stores) and \`wiki-linkcheck\`
+   (wiki links) already exist. If you spot something
    those cover, cite them instead of proposing to build them.
 3. Maximum $MAX findings. Prefer few and solid: one invented finding costs more
    than ten you didn't find.
