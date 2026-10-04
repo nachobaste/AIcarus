@@ -157,40 +157,6 @@ grep -q "src/ghost.js" "$RAWKEPT" || fail "the kept raw output does not hold wha
 grep -q "All invented" "$BACKLOG" && fail "a rejected finding still reached the backlog"
 echo "OK: when everything is discarded the raw output is kept for inspection"
 
-# ---- the attention budget: 50/30/20 by rotation ----------------------------
-# the owner fixed this split in the 2026-08-08 interview. It is asserted exactly, not
-# statistically, because the cycle is deterministic on purpose — a random draw
-# would need a tolerance, and a tolerance is where a broken selector hides.
-STATEDIR="$TMP/state-budget"; rm -rf "$STATEDIR"
-: > "$TMP/buckets"
-for _ in $(seq 10); do run --next-bucket >> "$TMP/buckets" 2>/dev/null; done
-[ "$(grep -c '^internas$'   "$TMP/buckets")" -eq 5 ] || fail "expected 5 internas, got $(grep -c '^internas$' "$TMP/buckets")"
-[ "$(grep -c '^conexiones$' "$TMP/buckets")" -eq 3 ] || fail "expected 3 conexiones, got $(grep -c '^conexiones$' "$TMP/buckets")"
-[ "$(grep -c '^externo$'    "$TMP/buckets")" -eq 2 ] || fail "expected 2 externo, got $(grep -c '^externo$' "$TMP/buckets")"
-echo "OK: 10 runs of the selector give exactly 50/30/20"
-
-# It must ADVANCE. A selector stuck on its first value would also produce a
-# plausible-looking file if the loop above only ever read slot 0.
-[ "$(sort -u "$TMP/buckets" | wc -l | tr -d ' ')" -eq 3 ] || fail "the selector never left one bucket"
-echo "OK: the selector advances through all three buckets"
-
-# Corrupt state must not be what stops a night.
-mkdir -p "$STATEDIR"; printf 'garbage' > "$STATEDIR/research-budget"
-run --next-bucket > "$TMP/b2" 2>/dev/null || fail "corrupt budget state broke the selector"
-grep -qE '^(internas|conexiones|externo)$' "$TMP/b2" || fail "corrupt state produced a non-bucket"
-echo "OK: corrupt budget state falls back instead of failing"
-
-# ---- the external bucket is routed but refuses ----------------------------
-# It needs network tools that no unattended session has. Routing it without
-# running it is the point: the decision stays the owner's, in its own discussion.
-STATEDIR="$TMP/state-ext"
-rm -f "$ARGS"
-run --scope externo > "$TMP/out" 2>&1; RC=$?
-[ "$RC" -eq 0 ] || fail "externo should exit 0, got $RC"
-grep -qi "pending.*decision" "$TMP/out" || fail "externo did not say why it refused"
-[ ! -f "$ARGS" ] || fail "externo invoked a model"
-echo "OK: --scope externo refuses, explains itself, and runs no model"
-
 grep -qE 'WebSearch|WebFetch' "$BIN" &&   grep -vqE '^\s*#' <(grep -E 'WebSearch|WebFetch' "$BIN") &&   fail "a network tool appears outside a comment"
 echo "OK: no network tool anywhere in the script"
 

@@ -162,9 +162,8 @@ A nightly run with an empty approved queue used to report "0 done, 0 failed" for
 eight nights in a row — not broken, just idle, because nothing generates
 candidate work between weekly interviews. `devbrain-research` is the fix: a
 read-only research shift (no `Write`, no `Edit`, no MCP tools available to that
-session — it *cannot* touch code even if it wanted to) that spends a rotating
-attention budget (internal gaps, cross-project links, and external exploration)
-investigating and writing up findings, which `devbrain-day` then turns into
+session — it *cannot* touch code even if it wanted to) that looks for internal
+gaps in one repo or links between projects, and writes up findings, which `devbrain-day` then turns into
 queue proposals for you to decide on the next day-shift — never approved for
 unattended execution by this path; only `devbrain-interview` can do that.
 
