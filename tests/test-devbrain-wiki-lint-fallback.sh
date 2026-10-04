@@ -43,7 +43,7 @@ echo "OK: the wiki-status-audit result reaches the Telegram summary"
 
 # ---- live: each checker runs ONCE, and its count reaches the summary --------
 # The four checkers are stubs next to a copy of the script, so this needs no
-# wiki, no gh and no model. A checker that ran twice (the old --quiet pattern)
+# wiki, no gh and no model. A checker that ran twice (the old quiet-then-rerun pattern)
 # shows up as two lines in its call log.
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/kit/bin" "$T/kit/lib" "$T/home/dev/wiki" "$T/home/.openclaw/logs"
