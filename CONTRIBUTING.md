@@ -28,7 +28,9 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   router, a different coding agent). These are welcome as long as they're
   genuinely optional — nothing in `bin/` or `lib/` should import a specific
   provider's SDK or hardcode its API shape. Route it through a config value, the
-  same way `DEVBRAIN_LLM_ROUTER` and `devbrain-base-branch.override` do.
+  same way `devbrain-base-branch.override` does. The router's model is the
+  bridge's own setting (`openclaw models set` with OpenClaw), so a different
+  router model needs no change here at all.
 
 ## Ground rules
 

@@ -17,7 +17,7 @@ out to `gh`/`git`) gluing together a small number of external things:
 |---|---|---|
 | [Claude Code](https://claude.com/claude-code) | The coding agent — the thing that reads a repo, writes code, runs tests, opens a PR (`bin/devbrain`) | Yes — any non-interactively invokable coding agent works, as long as it can be constrained to a branch |
 | [OpenClaw](https://github.com/openclaw/openclaw) | The reference Telegram bridge (`openclaw/`) | Yes — the most swappable piece; anything that turns a chat message into a shell command and back works |
-| Moonshot Kimi K2 (API) / [Ollama](https://ollama.com) (local) | The cheap LLM router that talks to you day-to-day | Yes — a config value (`DEVBRAIN_LLM_ROUTER` in `devbrain.local.env`), not hardcoded |
+| Moonshot Kimi K2 (API) / [Ollama](https://ollama.com) (local) | The cheap LLM router that talks to you day-to-day | Yes — any tool-calling model; chosen in the bridge (`openclaw models set <provider/model>`), not in this repo |
 | `gh` (GitHub CLI) | Opens PRs, reads PR/issue state for the audit scripts | Not really — several scripts shell out to it directly; a different forge would mean rewriting those |
 | `git` | Branching, the propose-only workflow's actual mechanism | No |
 | bash 3.2 + python3 | The scripting substrate | Not swappable, but see "Portability" later in this document for what that constrains |

@@ -55,11 +55,13 @@ Five moving parts:
 2. **A cheap LLM router.** The thing that actually talks to you day-to-day: turns
    "add a dark mode toggle to the settings page" into a queued work item, answers
    quick questions, nags you about a stale proposal. It should be cheap — it's
-   running constantly and doing very little real reasoning. The reference setup
-   uses Moonshot's Kimi K2 over its API, with a local [Ollama](https://ollama.com)
-   model as a self-hosted fallback. Both are documented as validated options in
-   `setup.sh`; anything else is on you to wire up (it's a config value, not a
-   hardcoded assumption).
+   running constantly and doing very little real reasoning, but it must support
+   tool calling, because it routes requests by calling `devbrain` through the
+   bridge. The reference setup uses Moonshot's Kimi K2 over its API, with a local
+   [Ollama](https://ollama.com) model as a self-hosted option. The model is chosen
+   in the bridge, not in this repo: with OpenClaw, run
+   `openclaw models set <provider/model>`. `devbrain-heartbeat` checks Ollama only
+   when the bridge's config uses it.
 
 3. **A file-based queue.** Markdown files with frontmatter, one per proposed task,
    living in `~/dev/queue/`. No database, no server — `git log` on that directory
@@ -119,12 +121,12 @@ openclaw/       persona/config templates for the OpenClaw messaging bridge, plus
                 a line in a prompt
 tests/          bash test suite (tests/*.sh — run any of them directly)
 docs/wiki-example/  a small, generic sample of the wiki convention (not a live wiki)
+docs/telegram-templates.md  example message templates for the Telegram bot
 devbrain-projects.allow        the repo allowlist (starts empty — see setup.sh)
 devbrain-projects.excluded     repos deliberately out of scope, with reasons
 devbrain-base-branch.override  per-repo "PRs target develop, not main" overrides
 devbrain-verify.commands       per-repo commands devbrain may run unattended
 devbrain-migration-block.list  per-repo "never write migrations here" list
-TELEGRAM-PLANTILLAS.md         example message templates for the Telegram bot
 setup.sh                       interactive first-run wizard
 ```
 
@@ -142,9 +144,10 @@ The following steps assume you're comfortable enough to adapt them yourself.
    it" isn't reliable; see `docs/CONCEPTS.md#if-you-clone-this-somewhere-else`
    if you'd rather use a different name or location).
 2. Run `./setup.sh`. It asks a handful of questions (your GitHub username, which
-   repos to manage, which LLM router to use, your Telegram bot token and chat id),
-   checks your prerequisites, and writes `devbrain-projects.allow` plus a local,
-   gitignored config file with your secrets.
+   repos to manage, your Telegram bot token and chat id), checks your
+   prerequisites, explains how to pick the router's model in the bridge, and
+   writes `devbrain-projects.allow` plus a local, gitignored config file with
+   your secrets.
 3. Read the checklist `setup.sh` prints at the end — installing the messaging
    bridge itself, wiring up launchd/cron for `devbrain-night`/`devbrain-digest`/
    `devbrain-heartbeat`, and running `gh auth login` are manual steps by design;
