@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/test-devbrain-digest-proposals.sh — the digest's proposals section (plan 230).
+# tests/test-devbrain-digest-proposals.sh — the digest's proposals section.
 #
 # devbrain-digest hardcodes `export PATH=...` near the top, which defeats a
 # PATH-prepend stubbing trick outright — a near miss on 2026-08-08 sent a live
@@ -7,7 +7,7 @@
 # is stubbed here through its DEVBRAIN_DIGEST_*_BIN override, never through PATH.
 #
 # The one property that matters more than any other: the numbering must survive
-# EXACTLY, because plan 250 lets the owner reply "dale 2" from Telegram. The fake
+# EXACTLY, because the owner can reply "dale 2" from Telegram. The fake
 # summarizer below OBVIOUSLY reworks anything it receives (it counts lines instead
 # of echoing them), so if the numbering ever got fed through it, the corruption
 # would be visible in the sent message.
@@ -52,7 +52,7 @@ cat > "$TMP/fake-personal-digest" <<'EOF'
 #!/bin/bash
 exit 0
 EOF
-# The gateway-down scenario for plan 260: openclaw fails, and a "never call me" curl
+# The gateway-down scenario: openclaw fails, and a "never call me" curl
 # guard makes the healthy-path tests fail loudly if the fallback ever fires when it
 # should not have.
 cat > "$TMP/fake-openclaw-down" <<'EOF'
@@ -148,7 +148,7 @@ PROP_LINE=$(grep -n "^1\. " "$SENT" | head -1 | cut -d: -f1)
 [ "$AI_LINE" -lt "$PROP_LINE" ] || fail "the proposals block does not come after the AI summary"
 echo "OK: the proposals block is appended after the AI summary"
 
-# ---- 4. a decided proposal (plan 240/250's future contract) is not repeated -
+# ---- 4. a decided proposal (the future contract of devbrain-day and Telegram approval) is not repeated -
 cat >> "$BACKLOG" <<'EOF'
 
 ## Proposals — 2026-08-07
@@ -170,7 +170,7 @@ run_digest >/dev/null 2>&1
 grep -q "Already decided yesterday" "$SENT" && fail "an already-decided proposal was shown again"
 echo "OK: an already-decided proposal never reappears in the digest"
 
-# ---- 5. gateway down -> the digest STILL arrives, via curl, tagged (plan 260) ----
+# ---- 5. gateway down -> the digest STILL arrives, via curl, tagged ----
 # The one test the plan says matters most: bring the gateway down on purpose, run the
 # digest, confirm delivery via curl and that the message says it used the fallback.
 : > "$CURL_CALLS"
@@ -194,7 +194,7 @@ run_digest > /dev/null 2>&1   # default stubs: healthy openclaw, fake-curl-never
 [ ! -s "$CURL_CALLS" ] || fail "curl was reached even though the gateway was healthy"
 echo "OK: a healthy gateway never falls back and never double-sends"
 
-# ---- 7. blocked tasks surface as a pending decision (plan 290, D5) ----------
+# ---- 7. blocked tasks surface as a pending decision ----------
 mkdir -p "$TMP/queue"
 cat > "$TMP/queue/50-repoa--something.plan.md" <<'EOF'
 ---

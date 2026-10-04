@@ -1,7 +1,6 @@
 #!/bin/bash
 # tests/test-devbrain-queue-dale.sh — devbrain-queue dale|no <n>, the command the
-# messaging assistant invokes when the owner replies to the digest from Telegram
-# (plan 250).
+# messaging assistant invokes when the owner replies to the digest from Telegram.
 #
 # What this suite can and cannot prove: it proves devbrain-queue's OWN argument
 # parsing is strict and that it calls the exact same day_apply used by the Mac

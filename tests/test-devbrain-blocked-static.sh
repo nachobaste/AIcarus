@@ -1,8 +1,8 @@
 #!/bin/bash
 # tests/test-devbrain-blocked-static.sh — static checks that bin/devbrain's execute
-# mode is wired for 'blocked' (plan 290). `claude` is invoked bare inside bin/devbrain,
+# mode is wired for 'blocked'. `claude` is invoked bare inside bin/devbrain,
 # with no override variable, and adding one is out of this plan's scope — the same
-# call this session made for devbrain-wiki-lint in plan 260. So these are static/
+# call this session made for devbrain-wiki-lint in an earlier change. So these are static/
 # structural checks, matching that precedent; the pure detector this wiring calls
 # (queue_blocked_command) is exercised live in tests/test-queue-blocked.sh, and the
 # consumer side (devbrain-night deciding status: blocked) is exercised live in

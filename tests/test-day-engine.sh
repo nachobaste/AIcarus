@@ -1,6 +1,6 @@
 #!/bin/bash
-# tests/test-day-engine.sh — the pure engine behind devbrain-day (plan 240) and, later,
-# Telegram approval (plan 250). Both interfaces resolve "which proposal" to a TITLE before
+# tests/test-day-engine.sh — the pure engine behind devbrain-day and, later,
+# Telegram approval. Both interfaces resolve "which proposal" to a TITLE before
 # calling this engine — never a list position — so a backlog that changes mid-session can
 # never make "dale 2" hit the wrong proposal. This suite is what proves that contract.
 set -uo pipefail

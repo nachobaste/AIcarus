@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/test-devbrain-day.sh — end-to-end devbrain-day: the six "how to verify"
-# cases from plan 240, each paired with what should NOT happen alongside it.
+# cases from the day shift (devbrain-day), each paired with what should NOT happen alongside it.
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-day"

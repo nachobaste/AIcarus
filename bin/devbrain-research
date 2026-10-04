@@ -11,7 +11,6 @@
 # findings file is appended by THIS script from captured stdout, the same way
 # devbrain-wiki-lint handles its summary — the model never holds a pen.
 #
-# Design: ~/dev/queue/190-machine-config--devbrain-research-motor.plan.md
 # Spec:   ~/dev/wiki/projects/devbrain-nocturno.md
 #
 # Two scopes: internal gaps in one repo, or links between projects. The caller
