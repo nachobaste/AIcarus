@@ -1,11 +1,11 @@
 #!/bin/bash
-# tests/test-devbrain-wiki-status-audit.sh — narrow PR-state and workflow-state
-# claims in wiki/status/*.md and wiki/services/*.md get checked against a fake
+# tests/test-devbrain-wiki-status-audit.sh — narrow PR-state claims in
+# wiki/status/*.md and wiki/services/*.md get checked against a fake
 # `gh`, never the network. Same discipline as test-devbrain-repo-audit.sh:
 # every detection assertion paired with a silence assertion, plus quote- and
 # table-masking cases modeled on real stale-status pages that motivated this
-# script (a status page with a corrected "PR merged" line, a services page
-# with a corrected job entry, and a "how it used to be" table).
+# script (a status page with a corrected "PR merged" line and a "how it used
+# to be" table).
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-wiki-status-audit"
@@ -14,9 +14,9 @@ trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "FAIL: $1"; exit 1; }
 
-mkdir -p "$TMP/wiki/status" "$TMP/wiki/services" "$TMP/bin" "$TMP/gh-data/workflows"
+mkdir -p "$TMP/wiki/status" "$TMP/wiki/services" "$TMP/bin" "$TMP/gh-data"
 
-# ---- fake `gh`: pr view + workflow list, driven by fixture files -----------
+# ---- fake `gh`: pr view, driven by fixture files -----------
 cat > "$TMP/bin/gh" <<'FAKEGH'
 #!/bin/bash
 DATA="$FAKE_GH_DATA"
@@ -41,16 +41,6 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   echo "{\"state\":\"$LINE\",\"mergedAt\":null}"
   exit 0
 fi
-if [ "$1" = "workflow" ] && [ "$2" = "list" ]; then
-  REPO=""
-  shift 2
-  while [ $# -gt 0 ]; do
-    case "$1" in --repo) REPO="$2"; shift 2 ;; *) shift ;; esac
-  done
-  FILE="$DATA/workflows/$(echo "$REPO" | tr '/' '_').json"
-  if [ -f "$FILE" ]; then cat "$FILE"; else echo "[]"; fi
-  exit 0
-fi
 echo "fake gh: unhandled invocation: $*" >&2
 exit 1
 FAKEGH
@@ -59,19 +49,12 @@ export FAKE_GH_DATA="$TMP/gh-data"
 
 export WIKI_STATUS_AUDIT_WIKI="$TMP/wiki"
 export WIKI_STATUS_AUDIT_ALLOWFILE="$TMP/allow"
-export WIKI_STATUS_AUDIT_SCRAPERS_TSV="$TMP/scrapers.tsv"
 export WIKI_STATUS_AUDIT_GH="$TMP/bin/gh"
 export WIKI_STATUS_AUDIT_OWNER="testowner"
 
 cat > "$TMP/allow" <<'EOF'
 testrepo
 machine-config
-EOF
-
-cat > "$TMP/scrapers.tsv" <<'EOF'
-# id	repo	schedule	timeout_min	script
-sync-acc	repob	weekly:1:8	20	scrapers/repob/sync-acc.sh
-repoc-jobs	repoc	daily:6,14	180	scrapers/repoc/repoc-jobs.sh
 EOF
 
 # ---- PR-state fixture data --------------------------------------------------
@@ -88,19 +71,11 @@ otherowner/otherrepo#30	CLOSED
 testowner/machine-config#4	OPEN
 EOF
 
-mkdir -p "$TMP/gh-data/workflows"
-cat > "$TMP/gh-data/workflows/testowner_repob.json" <<'EOF'
-[{"name":"Sync ACC Documents","path":".github/workflows/sync-acc.yml","state":"disabled_manually"}]
-EOF
-cat > "$TMP/gh-data/workflows/testowner_repoc.json" <<'EOF'
-[{"name":"Scrape Job Listings","path":".github/workflows/scrape-jobs.yml","state":"active"}]
-EOF
-
 # ---- wiki/status/testrepo.md ------------------------------------------------
 # Bullets are kept clean (no annotations inside the "- " text itself) on
 # purpose: an earlier draft of this fixture put "SILENCE"/"DETECTION"
-# explanations inside the bullets, and words like "MERGED" and "activo"
-# inside those very annotations were then picked up by the regex they were
+# explanations inside the bullets, and words like "MERGED" inside those very
+# annotations were then picked up by the regex they were
 # describing -- a self-inflicted false positive. What each bullet must
 # produce is documented here in the script instead:
 #   #10  MERGED link, actual MERGED             -> silent
@@ -140,23 +115,11 @@ EOF
 #   #4   backtick-repo `machine-config`, claim OPEN, actual OPEN -> silent
 #   #5   bare mention, no link, no backtick-repo -> skipped (services pages
 #        never fall back to a filename-derived repo)
-#   sync-acc:RESUELTO, qualified by "apagado" elsewhere in the bullet,
-#        actual disabled_manually -> silent
-#   repoc-jobs:RESUELTO, no unquoted apagado/activo/pendiente qualifier
-#        (the only "pendiente" is inside quotes, the only "active" is the
-#        English word quoting `gh`'s own output, not the Spanish "activo")
-#        -> skipped, ambiguous, must NOT be silent by accident
-#   sync-acc:pendiente (second, separate bullet), actual disabled_manually
-#        -> DETECTION (still claimed pending after the workflow was
-#        actually disabled)
 cat > "$TMP/wiki/services/testautomations.md" <<'EOF'
 # Test automations
 
 - **PR abierto, pendiente de merge:** `machine-config` PR #4 (rama foo).
 - **Sin repo:** PR #5, sin mergear, prioridad baja.
-- **`sync-acc`: RESUELTO** (2026-08-02). Su workflow de GitHub quedo **apagado** (`gh workflow disable`).
-- **`repoc-jobs`: RESUELTO** (2026-08-04, corregida el 2026-08-12 -- seguia marcada "pendiente" 8 dias despues). Mecanismo distinto: se quito el trigger `on: schedule`; el workflow sigue `active` a proposito.
-- **`sync-acc`: pendiente** de resolver el doble agendamiento (bullet de prueba).
 EOF
 
 OUT="$("$BIN")"
@@ -173,7 +136,6 @@ $OUT"; }
 assert_line "testowner/testrepo#12	claim=OPEN	actual=MERGED"
 assert_line "testowner/testrepo#21	claim=MERGED	actual=OPEN"
 assert_line "otherowner/otherrepo#30	claim=OPEN	actual=CLOSED"
-assert_line "sync-acc (testowner/repob)	claim=pendiente	actual=disabled_manually"
 
 # ---- silence assertions (must never appear) --------------------------------
 assert_absent "testrepo#10"
@@ -184,26 +146,11 @@ assert_absent "testrepo#40"
 assert_absent "machine-config#4"
 assert_absent "#5	claim"
 assert_absent "#999"
-assert_absent "repoc-jobs (testowner/repoc)"
-# sync-acc's RESUELTO bullet must not add a SECOND workflow finding beyond
-# the one pendiente detection above (it must resolve to bucket OFF and match
-# the actual disabled_manually state, i.e. be silent on its own).
-[ "$(printf '%s\n' "$OUT" | grep -c 'sync-acc (testowner/repob)')" = "1" ] \
-  || fail "expected exactly 1 sync-acc finding (the pendiente one), got:
-$OUT"
 
-echo "$OUT" | grep -q "^wiki-status-audit: 4$" \
-  || fail "expected count line 'wiki-status-audit: 4', got:
+echo "$OUT" | grep -q "^wiki-status-audit: 3$" \
+  || fail "expected count line 'wiki-status-audit: 3', got:
 $OUT"
 echo "OK: all detection + silence assertions passed"
-
-# ---- --quiet: no output, same exit code ------------------------------------
-QOUT="$("$BIN" --quiet)"
-RCQ=$?
-[ -z "$QOUT" ] || fail "--quiet must print nothing, got:
-$QOUT"
-[ "$RCQ" = 1 ] || fail "--quiet must keep the same exit code, got $RCQ"
-echo "OK: --quiet suppresses output, keeps exit code"
 
 # ---- error paths -------------------------------------------------------------
 WIKI_STATUS_AUDIT_WIKI="$TMP/does-not-exist" "$BIN" >/dev/null 2>&1
@@ -224,7 +171,10 @@ echo "OK: error paths (missing wiki dir, unusable gh) exit 2"
 # flagged. If the mutated copy still reports the same finding, this test
 # suite was never actually exercising the comparison -- it would be a
 # checker nobody tried to fool. Operates on a COPY, never on $BIN itself.
-MUTANT="$TMP/mutated-devbrain-wiki-status-audit"
+# The copy sits in a bin/ next to a copy of lib/, so its shared-helper import
+# resolves: a mutant that dies on ImportError would pass this check vacuously.
+mkdir -p "$TMP/mut/bin"; cp -R "$DIR/lib" "$TMP/mut/lib"
+MUTANT="$TMP/mut/bin/mutated-devbrain-wiki-status-audit"
 cp "$BIN" "$MUTANT"
 python3 - "$MUTANT" <<'PYEOF'
 import sys
@@ -241,6 +191,8 @@ chmod +x "$MUTANT"
 
 MUT_OUT="$("$MUTANT")"
 MUT_RC=$?
+printf '%s\n' "$MUT_OUT" | grep -q "^wiki-status-audit: " \
+  || fail "the mutant did not run to completion (import error?) -- output: $MUT_OUT"
 
 if [ "$MUT_RC" = 1 ] && printf '%s\n' "$MUT_OUT" | grep -qF "testrepo#12	claim=OPEN	actual=MERGED"; then
   fail "mutation check failed: inverting the comparison did NOT change detection of testrepo#12 -- the check was never really checking this"

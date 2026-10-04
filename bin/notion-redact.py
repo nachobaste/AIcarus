@@ -11,7 +11,6 @@ capitalised words before a surname, which collapsed "El Presidente Ejecutivo
 <name>" into a single placeholder and destroyed legitimate content. Explicit
 entries beat inference.
 """
-import json
 import os
 import re
 import sys
@@ -50,44 +49,15 @@ def build_regex(patterns):
     return re.compile("|".join(parts), re.IGNORECASE)
 
 
-def redact_json(rx, raw):
-    """Redact only string VALUES, never keys.
-
-    (9) Redacting the serialised blob could rewrite a property name — a names
-    list containing "Sync" turned {"Sync Key": ...} into {"[puesto] Key": ...},
-    corrupting the payload the sync sends. Values are the only place a person
-    name can legitimately appear.
-    """
-    def walk(node):
-        if isinstance(node, dict):
-            return {k: walk(v) for k, v in node.items()}
-        if isinstance(node, list):
-            return [walk(v) for v in node]
-        if isinstance(node, str):
-            return rx.sub(PLACEHOLDER, node)
-        return node
-
-    return json.dumps(walk(json.loads(raw)), ensure_ascii=False)
-
-
 def main():
-    mode_text = "--text" in sys.argv[1:]
+    # `--text` is accepted for compatibility with existing callers; plain text
+    # is the only mode.
     patterns = load_patterns(NAMES_FILE)
     if not patterns:
         print(f"notion-redact: {NAMES_FILE} is missing or has no patterns — "
               "refusing to emit unredacted content", file=sys.stderr)
         return 2
-    rx = build_regex(patterns)
-    raw = sys.stdin.read()
-    if mode_text:
-        sys.stdout.write(rx.sub(PLACEHOLDER, raw))
-        return 0
-    try:
-        sys.stdout.write(redact_json(rx, raw) + "\n")
-    except json.JSONDecodeError as exc:
-        print(f"notion-redact: stdin is not valid JSON ({exc}); "
-              "use --text for plain text", file=sys.stderr)
-        return 1
+    sys.stdout.write(build_regex(patterns).sub(PLACEHOLDER, sys.stdin.read()))
     return 0
 
 

@@ -9,8 +9,7 @@
 
 # Absolute default, NOT derived from ${BASH_SOURCE[0]}: that resolves emptily
 # under zsh when a caller sources this file directly instead of running an actual
-# bash script — see the identical lesson already fixed in lib/classify.sh
-# (NOTION_REDACT_BIN). A missing engine must also exit with its OWN distinct code,
+# bash script. A missing engine must also exit with its OWN distinct code,
 # never "python can't open file" (exit 2), which is indistinguishable from
 # day_engine.py's own deliberate refusals.
 DAY_ENGINE="${DAY_ENGINE:-$HOME/dev/devbrain/lib/day_engine.py}"

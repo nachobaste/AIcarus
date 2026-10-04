@@ -14,7 +14,6 @@ proved could fail. File existence is decidable, so decide it.
 
 Usage:
     wiki-linkcheck [VAULT]        # default ~/dev/wiki
-    wiki-linkcheck --quiet        # exit code only, no per-link output
 
 Exit codes:
     0  no unresolved links
@@ -204,20 +203,18 @@ def check(vault):
 
 
 def main(argv):
-    args = [a for a in argv[1:] if a != "--quiet"]
-    quiet = "--quiet" in argv[1:]
+    args = argv[1:]
     vault = os.path.expanduser(args[0] if args else "~/dev/wiki")
     if not os.path.isdir(vault):
         print(f"wiki-linkcheck: not a directory: {vault}", file=sys.stderr)
         return 2
 
     problems, stats = check(vault)
-    if not quiet:
-        print(f"scanned {stats['files']} files · {stats['md']} markdown links · "
-              f"{stats['wiki']} wikilinks")
-        print(f"unresolved: {len(problems)}")
-        for src, num, raw, why in problems:
-            print(f"{os.path.relpath(src, vault)}:{num}\t{why}\t{raw}")
+    print(f"scanned {stats['files']} files · {stats['md']} markdown links · "
+          f"{stats['wiki']} wikilinks")
+    print(f"unresolved: {len(problems)}")
+    for src, num, raw, why in problems:
+        print(f"{os.path.relpath(src, vault)}:{num}\t{why}\t{raw}")
     return 1 if problems else 0
 
 

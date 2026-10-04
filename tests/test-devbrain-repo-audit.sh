@@ -115,13 +115,6 @@ printf '%s\n' "$OUT2" | grep -q "^repo-audit: 2$" \
   || fail "mutation check: expected count to drop to 2 after excluding blind-spot, got:
 $OUT2"
 
-# ---- --quiet: no per-repo lines, no count line, same exit code ----
-"$BIN" --quiet > "$TMP/quiet-out" 2>/dev/null
-RCQ=$?
-[ -s "$TMP/quiet-out" ] && fail "--quiet must print nothing, got:
-$(cat "$TMP/quiet-out")"
-[ "$RCQ" = 1 ] || fail "--quiet must keep the same exit code, got $RCQ"
-
 # ---- error paths ----
 REPO_AUDIT_PROJECTS_DIR="$TMP/does-not-exist" "$BIN" >/dev/null 2>&1
 [ $? = 2 ] || fail "missing PROJECTS_DIR must exit 2"

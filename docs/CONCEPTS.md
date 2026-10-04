@@ -17,10 +17,9 @@ out to `gh`/`git`) gluing together a small number of external things:
 |---|---|---|
 | [Claude Code](https://claude.com/claude-code) | The coding agent — the thing that reads a repo, writes code, runs tests, opens a PR (`bin/devbrain`) | Yes — any non-interactively invokable coding agent works, as long as it can be constrained to a branch |
 | [OpenClaw](https://github.com/openclaw/openclaw) | The reference Telegram bridge (`openclaw/`) | Yes — the most swappable piece; anything that turns a chat message into a shell command and back works |
-| Moonshot Kimi K2 (API) / [Ollama](https://ollama.com) (local) | The cheap LLM router that talks to you day-to-day | Yes — a config value (`DEVBRAIN_LLM_ROUTER` in `devbrain.local.env`), not hardcoded |
+| Moonshot Kimi K2 (API) / [Ollama](https://ollama.com) (local) | The cheap LLM router that talks to you day-to-day | Yes — any tool-calling model; chosen in the bridge (`openclaw models set <provider/model>`), not in this repo |
 | `gh` (GitHub CLI) | Opens PRs, reads PR/issue state for the audit scripts | Not really — several scripts shell out to it directly; a different forge would mean rewriting those |
 | `git` | Branching, the propose-only workflow's actual mechanism | No |
-| Notion API (`bin/notion-*`) | Optional mirror of the queue/wiki into a Notion workspace | Entirely optional — ignore it if you don't use Notion |
 | bash 3.2 + python3 | The scripting substrate | Not swappable, but see "Portability" later in this document for what that constrains |
 
 ## The propose-only workflow, mechanically
@@ -105,10 +104,9 @@ An unattended session verifies its own work with the commands you declared in
 
 ## The "deliberate act" config-file convention
 
-Six plain-text files at the repo root — `devbrain-projects.allow`,
+Five plain-text files at the repo root — `devbrain-projects.allow`,
 `devbrain-projects.excluded`, `devbrain-base-branch.override`,
-`devbrain-verify.commands`, `devbrain-migration-block.list`, and (optionally)
-`devbrain-classify.tiers` — all ship empty except comments, and all follow the
+`devbrain-verify.commands`, and `devbrain-migration-block.list` — all ship empty except comments, and all follow the
 same rule: **adding a line is a deliberate act you take, not a default the
 system assumes for you.** The reasoning is spelled out inline in each file
 (read them, they're short), but the pattern itself is worth naming: every one of
@@ -119,18 +117,6 @@ making it for you. If you're adding a new capability that needs its own
 allowlist, extend one of these (or add a new file following the identical
 "empty by default, one line per deliberate decision, format documented in the
 file's own header comment" shape) rather than inventing a different mechanism.
-
-## The four-tier data classification (`lib/classify.sh`)
-
-`personal | business-confidential | interno-devbrain | publico` (public). Every
-path gets classified by `classify_tier()`, and **unknown paths fail closed to
-`business-confidential`** — a brand-new directory nobody has classified yet
-must not leak by default just because nobody got around to labeling it.
-`assert_egress_ok <tier> <destination>` is the single gate every script that
-sends content somewhere (GitHub, Notion, Telegram) is expected to call before
-sending it; `personal` is refused for every destination on purpose (it's not
-even listed as an allowed case — bash's `case` falls through to the refusal
-after `esac`, so there's no branch to accidentally return 0 from).
 
 ## The wiki convention (`docs/wiki-example/`)
 
@@ -176,9 +162,8 @@ A nightly run with an empty approved queue used to report "0 done, 0 failed" for
 eight nights in a row — not broken, just idle, because nothing generates
 candidate work between weekly interviews. `devbrain-research` is the fix: a
 read-only research shift (no `Write`, no `Edit`, no MCP tools available to that
-session — it *cannot* touch code even if it wanted to) that spends a rotating
-attention budget (internal gaps, cross-project links, and external exploration)
-investigating and writing up findings, which `devbrain-day` then turns into
+session — it *cannot* touch code even if it wanted to) that looks for internal
+gaps in one repo or links between projects, and writes up findings, which `devbrain-day` then turns into
 queue proposals for you to decide on the next day-shift — never approved for
 unattended execution by this path; only `devbrain-interview` can do that.
 
@@ -201,12 +186,10 @@ different one:
 | Script | Env var(s) | Defaults to |
 |---|---|---|
 | `lib/day.sh` | `DAY_ENGINE` | `~/dev/devbrain/lib/day_engine.py` |
-| `lib/classify.sh` | `CLASSIFY_TIERS_FILE` | `~/dev/devbrain/devbrain-classify.tiers` |
-| `lib/classify.sh` | `NOTION_REDACT_BIN` | `~/dev/devbrain/bin/notion-redact.py` |
 | `bin/devbrain-repo-audit` | `REPO_AUDIT_ALLOWFILE`, `REPO_AUDIT_EXCLUDEFILE` | `~/dev/devbrain/devbrain-projects.{allow,excluded}` |
-| `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE`, `WIKI_STATUS_AUDIT_SCRAPERS_TSV` | `~/dev/devbrain/devbrain-projects.allow`, `~/dev/devbrain/scrapers.tsv` |
+| `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE` | `~/dev/devbrain/devbrain-projects.allow` |
 | `bin/devbrain-stacked-pr-check` | `STACKED_PR_ALLOWFILE`, `STACKED_PR_BASE_OVERRIDE` | `~/dev/devbrain/devbrain-projects.allow`, `~/dev/devbrain/devbrain-base-branch.override` |
-| `bin/devbrain-drift` | `DRIFT_SNAPSHOT`, `DRIFT_SKILLS` | `~/dev/devbrain/openclaw/workspace`, `~/dev/devbrain/claude/skills` |
+| `bin/devbrain-drift` | `DRIFT_SNAPSHOT`, `DRIFT_SKILLS`, `NOTION_REDACT_BIN` | `~/dev/devbrain/openclaw/workspace`, `~/dev/devbrain/claude/skills`, `~/dev/devbrain/bin/notion-redact.py` |
 | `openclaw/exec-approvals.json` | (not env-driven — edit the file) | placeholder paths, must be edited to your actual clone path regardless of what you name it |
 
 If you clone under a different name or path, set the relevant variables (in
@@ -219,8 +202,8 @@ macOS ships bash 3.2 as `/bin/bash`, and a script's `#!/bin/bash` shebang execs
 that directly regardless of what's on `$PATH` — a contributor with a newer bash
 installed using Homebrew won't be protected from this if they write a script that
 only works on bash 4+. Concretely, this repo avoids: `declare -A` (associative
-arrays — see the case-statement-based tier tally as the alternative pattern),
+arrays — use a `case` statement instead),
 `wait -n`, `${var,,}` case-folding, and `mapfile`. `lib/queue.sh`'s
-`with_timeout` and `lib/schedule.sh`'s manifest parsing both carry comments
-explaining the specific bash-3.2-safe workaround in place — read those before
+`with_timeout` carries a comment explaining the bash-3.2-safe workaround in
+place — read it before
 reaching for a bash 4+ feature that looks like it'd simplify something.

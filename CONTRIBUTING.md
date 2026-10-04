@@ -12,19 +12,6 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   a hardcoded path, a username, a company name, an assumption that only holds for
   the original author's machine. These are the highest-value contributions: a
   starter kit that quietly only works for its own creator isn't a starter kit.
-  **Known open gap:** `bin/notion-sync-sources.py` and `bin/notion-sync-upsert.py`
-  (the optional Notion mirror) still model a Notion database schema with the
-  original author's own Spanish property names (`Semáforo`, `Motivo del
-  semáforo`, `Código`, `Área`, `Categoría`, ...). This is different in kind from
-  the interactive/LLM-facing scripts (already translated, see `git log`): a
-  Notion sync is inherently a worked example against *someone's* real database
-  schema, and whoever adopts it has to redesign the property mapping for their
-  own workspace either way — English vs. Spanish property names in the example
-  doesn't change that. Still, a PR that reworks the example around generic
-  English property names (updating both files' field-mapping tables together,
-  since they must agree on names) would remove the last visible sign this was
-  extracted from one specific setup, and is a legitimate contribution under
-  this category.
 - **A swappable piece that isn't actually swappable.** The README claims the
   messaging bridge, the LLM router, and the coding agent are all replaceable. If
   you tried to swap one and hit a place that assumed OpenClaw, or Kimi, or Claude
@@ -32,7 +19,7 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   request.
 - **A new safeguard, following the existing pattern.** Every guardrail in this
   repo (the propose-only workflow, `devbrain-verify.commands`, the migration
-  block list, `devbrain-check-blocked-actions`, `classify.sh`'s tiers) exists
+  block list, `devbrain-check-blocked-actions`) exists
   because something went wrong once and got turned into a mechanical rule instead
   of a remembered judgment call. See `docs/wiki-example/lessons/` for the shape a
   writeup like that takes. If you're proposing a new one, a short "here's the
@@ -41,7 +28,9 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   router, a different coding agent). These are welcome as long as they're
   genuinely optional — nothing in `bin/` or `lib/` should import a specific
   provider's SDK or hardcode its API shape. Route it through a config value, the
-  same way `DEVBRAIN_LLM_ROUTER` and `devbrain-base-branch.override` do.
+  same way `devbrain-base-branch.override` does. The router's model is the
+  bridge's own setting (`openclaw models set` with OpenClaw), so a different
+  router model needs no change here at all.
 
 ## Ground rules
 
@@ -54,9 +43,8 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   macOS ships bash 3.2 as `/bin/bash` (the shebang execs it directly, ignoring
   `$PATH`, so a newer bash on your `$PATH` won't save a contributor who doesn't
   have one). That means: no `declare -A` (associative arrays), no `wait -n`, no
-  `${var,,}` lowercasing, no `mapfile`. See the comments at the top of
-  `lib/schedule.sh` and `lib/queue.sh` for the specific workarounds already in
-  place (a polling loop instead of a backgrounded watchdog, because a subshell
+  `${var,,}` lowercasing, no `mapfile`. See the comments in `lib/queue.sh`
+  for the specific workarounds already in place (a polling loop instead of a backgrounded watchdog, because a subshell
   can't `wait` on a PID it didn't fork).
 - **Every script that reads or writes outside its own repo names the safeguard
   it's honoring.** `devbrain-verify.commands`, `devbrain-migration-block.list`,
@@ -108,6 +96,4 @@ Per the README's own "What's intentionally NOT in this starter kit" section:
 scrapers, anything Sentry-specific, personal-data digests (email/calendar/task
 briefings), or anything else that's inherently one operator's bespoke setup
 rather than generic machinery. If you built something like that for yourself,
-the right contribution is a short pattern writeup (the way `lib/schedule.sh`'s
-manifest format is described as "copy this if you build your own"), not the code
-itself.
+the right contribution is a short pattern writeup, not the code itself.

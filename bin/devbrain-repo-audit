@@ -34,7 +34,7 @@ Cost: exactly one `gh repo list` call, no matter how many repos exist. No `gh`
 calls per-repo (this is metadata GitHub already returns in one page).
 
 Usage:
-    devbrain-repo-audit [--quiet]
+    devbrain-repo-audit
 
 Exit codes:
     0  nothing to flag
@@ -44,8 +44,10 @@ Exit codes:
 """
 import json
 import os
-import subprocess
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from devbrain_common import read_names, run  # noqa: E402
 
 HOME = os.path.expanduser("~")
 # No default: a real GitHub username baked in here would silently audit the
@@ -64,30 +66,6 @@ FINDING_UNCLASSIFIED = "repo-unclassified"
 
 def warn(msg):
     print(f"devbrain-repo-audit: {msg}", file=sys.stderr)
-
-
-def read_names(path):
-    names = set()
-    if not os.path.isfile(path):
-        return names
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            # .excluded lines are "name  # reason"; .allow lines are bare names.
-            name = line.split("#", 1)[0].strip()
-            if name:
-                names.add(name)
-    return names
-
-
-def run(cmd):
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        return proc.returncode == 0, proc.stdout, proc.stderr
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, "", str(exc)
 
 
 def list_repos(owner):
@@ -110,8 +88,6 @@ def is_cloned(name):
 
 
 def main(argv):
-    quiet = "--quiet" in argv[1:]
-
     if not OWNER:
         print("devbrain-repo-audit: REPO_AUDIT_OWNER is not set. Set it to your "
               "own GitHub username -- there is no default.", file=sys.stderr)
@@ -142,10 +118,9 @@ def main(argv):
         if name not in allowed:
             findings.append((FINDING_UNCLASSIFIED, name, pushed))
 
-    if not quiet:
-        for kind, name, pushed in findings:
-            print(f"{kind}\t{name}\t{pushed}")
-        print(f"repo-audit: {len(findings)}")
+    for kind, name, pushed in findings:
+        print(f"{kind}\t{name}\t{pushed}")
+    print(f"repo-audit: {len(findings)}")
     return 1 if findings else 0
 
 

@@ -41,4 +41,38 @@ grep -q '\$STALE' "$WL" \
   || fail "the wiki-status-audit result (\$STALE) never reaches the Telegram summary"
 echo "OK: the wiki-status-audit result reaches the Telegram summary"
 
+# ---- live: each checker runs ONCE, and its count reaches the summary --------
+# The four checkers are stubs next to a copy of the script, so this needs no
+# wiki, no gh and no model. A checker that ran twice (the old quiet-then-rerun pattern)
+# shows up as two lines in its call log.
+T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/kit/bin" "$T/kit/lib" "$T/home/dev/wiki" "$T/home/.openclaw/logs"
+cp "$WL" "$T/kit/bin/"; cp "$DIR/lib/telegram.sh" "$T/kit/lib/"
+stub() { # <name> <exit> <count line>
+  printf '#!/bin/bash\necho run >> "%s/%s.calls"\necho "finding-row"\necho "%s"\nexit %s\n' \
+    "$T" "$1" "$3" "$2" > "$T/kit/bin/$1"
+  chmod +x "$T/kit/bin/$1"
+}
+stub wiki-linkcheck 0 "unresolved: 0"
+stub devbrain-drift 1 "drift: 3"
+stub devbrain-stacked-pr-check 0 "stacked-pr: 0"
+stub devbrain-wiki-status-audit 1 "wiki-status-audit: 2"
+printf '#!/bin/bash\necho "lint summary"\n' > "$T/claude"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/sent"\n' "$T" > "$T/openclaw"
+chmod +x "$T/claude" "$T/openclaw"
+HOME="$T/home" DEVBRAIN_TG_CHAT_ID=1 DEVBRAIN_WIKI_LINT_CLAUDE_BIN="$T/claude" \
+  DEVBRAIN_WIKI_LINT_OPENCLAW_BIN="$T/openclaw" bash "$T/kit/bin/devbrain-wiki-lint" >/dev/null 2>&1
+for c in devbrain-drift devbrain-stacked-pr-check devbrain-wiki-status-audit; do
+  [ "$(wc -l < "$T/$c.calls" | tr -d ' ')" = 1 ] || fail "$c ran $(cat "$T/$c.calls" 2>/dev/null | wc -l | tr -d ' ') times, expected once"
+done
+# linkcheck runs twice by design: once to hand the model its list, once to verify.
+[ "$(wc -l < "$T/wiki-linkcheck.calls" | tr -d ' ')" = 2 ] || fail "wiki-linkcheck should run exactly twice"
+echo "OK: each checker runs once per verdict"
+grep -q "links OK · ⚠️ 3 drift between stores · no orphaned stacked PRs · ⚠️ 2 outdated claim(s)" "$T/sent" \
+  || fail "summary does not carry the checkers' verdicts: $(cat "$T/sent" 2>/dev/null)"
+echo "OK: the summary carries each checker's verdict and count"
+grep -q "finding-row" "$T/home/.openclaw/logs/wiki-lint.log" \
+  || fail "a failing checker's report did not reach the log"
+echo "OK: a failing checker's full report reaches the log"
+
 echo "PASS: devbrain-wiki-lint-fallback"

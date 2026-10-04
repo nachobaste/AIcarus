@@ -37,8 +37,14 @@ PROBLEMS=""
 # 1. Messaging bridge gateway alive
 launchctl print gui/$(id -u)/ai.openclaw.gateway >/dev/null 2>&1 || PROBLEMS="$PROBLEMS bridge-down."
 pgrep -f "openclaw.*gateway" >/dev/null 2>&1 || PROBLEMS="$PROBLEMS gateway-no-process."
-# 2. Local LLM (Ollama) responds, if you're using that option
-curl -s -m 5 http://127.0.0.1:11434/api/tags >/dev/null 2>&1 || PROBLEMS="$PROBLEMS ollama-not-responding."
+# 2. Local LLM (Ollama) responds — only if the bridge is configured to use it.
+#    The router's model is chosen in OpenClaw (`openclaw models set`), so its
+#    config is what says whether Ollama is in play; probing it unconditionally
+#    raised a permanent false alert for anyone on a hosted model.
+OLLAMA_URL="${DEVBRAIN_OLLAMA_URL:-http://127.0.0.1:11434}"
+if grep -qi ollama "$HOME/.openclaw/openclaw.json" 2>/dev/null; then
+  curl -s -m 5 "$OLLAMA_URL/api/tags" >/dev/null 2>&1 || PROBLEMS="$PROBLEMS ollama-not-responding."
+fi
 # 3. Disk: alert if <15% free
 FREE=$(df / | awk 'NR==2{gsub("%","",$5); print 100-$5}')
 [ "${FREE:-100}" -lt 15 ] && PROBLEMS="$PROBLEMS low-disk(${FREE}%free)."

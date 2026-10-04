@@ -153,41 +153,19 @@ echo
 
 # ----------------------------------------------------------------------------
 echo "----------------------------------------------------------------------"
-echo "Step 4 of 5 — which LLM should the Telegram-facing router use?"
+echo "Step 4 of 5 — the model behind the Telegram-facing router"
 echo "----------------------------------------------------------------------"
 echo
-echo "This is the cheap model that chats with you day-to-day and turns requests"
-echo "into devbrain calls or queue entries — NOT the coding agent itself."
+echo "The router is the cheap model that chats with you day-to-day and turns"
+echo "requests into devbrain calls or queue entries — NOT the coding agent itself."
+echo "Its model lives in the messaging bridge's config, not in this repo. With"
+echo "OpenClaw, pick it after installing the bridge:"
 echo
-echo "  1) Moonshot Kimi (API-based, cheap, good default)"
-echo "  2) Local Ollama model (self-hosted, free, needs a running Ollama instance)"
-echo "  3) I'll configure this myself"
+echo "    openclaw models set <provider/model>"
 echo
-ask "Choice [1/2/3]: "
-LLM_CHOICE="$REPLY_VALUE"
-case "$LLM_CHOICE" in
-  1)
-    LLM_ROUTER="moonshot-kimi"
-    echo "Selected: Moonshot Kimi. You'll need an API key from"
-    echo "https://platform.moonshot.ai — set it in your messaging bridge's config"
-    echo "(e.g. openclaw.json's model provider section), not in this repo."
-    ;;
-  2)
-    LLM_ROUTER="ollama-local"
-    echo "Selected: local Ollama. Install from https://ollama.com, pull a model"
-    echo "(e.g. 'ollama pull llama3'), and point your messaging bridge's config at"
-    echo "http://127.0.0.1:11434."
-    ;;
-  3)
-    LLM_ROUTER="custom"
-    echo "Selected: custom. See README.md — this is a config value in your"
-    echo "messaging bridge, not something devbrain's own scripts hardcode."
-    ;;
-  *)
-    LLM_ROUTER="unset"
-    echo "(no valid choice entered — leaving this for you to configure later)"
-    ;;
-esac
+echo "Any tool-calling model works (the router must call devbrain through the"
+echo "bridge's exec tool). If you choose a local Ollama model, devbrain-heartbeat"
+echo "sees it in openclaw.json and starts checking that Ollama responds."
 echo
 
 # ----------------------------------------------------------------------------
@@ -227,9 +205,6 @@ fi
   echo "# (no shared default, on purpose — see each script's own comments):"
   echo "REPO_AUDIT_OWNER=\"${GITHUB_USERNAME}\"           # bin/devbrain-repo-audit"
   echo "WIKI_STATUS_AUDIT_OWNER=\"${GITHUB_USERNAME}\"    # bin/devbrain-wiki-status-audit"
-  echo
-  echo "# Which LLM router you picked in setup: moonshot-kimi | ollama-local | custom | unset"
-  echo "DEVBRAIN_LLM_ROUTER=\"${LLM_ROUTER}\""
   echo
   echo "# The bot token itself is NOT stored in plain env here by default — put it"
   echo "# in your messaging bridge's own config (e.g. openclaw.json), which is the"
