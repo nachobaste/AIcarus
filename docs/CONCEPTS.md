@@ -188,7 +188,7 @@ different one:
 |---|---|---|
 | `lib/day.sh` | `DAY_ENGINE` | `~/dev/devbrain/lib/day_engine.py` |
 | `bin/devbrain-repo-audit` | `REPO_AUDIT_ALLOWFILE`, `REPO_AUDIT_EXCLUDEFILE` | `~/dev/devbrain/devbrain-projects.{allow,excluded}` |
-| `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE`, `WIKI_STATUS_AUDIT_SCRAPERS_TSV` | `~/dev/devbrain/devbrain-projects.allow`, `~/dev/devbrain/scrapers.tsv` |
+| `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE` | `~/dev/devbrain/devbrain-projects.allow` |
 | `bin/devbrain-stacked-pr-check` | `STACKED_PR_ALLOWFILE`, `STACKED_PR_BASE_OVERRIDE` | `~/dev/devbrain/devbrain-projects.allow`, `~/dev/devbrain/devbrain-base-branch.override` |
 | `bin/devbrain-drift` | `DRIFT_SNAPSHOT`, `DRIFT_SKILLS`, `NOTION_REDACT_BIN` | `~/dev/devbrain/openclaw/workspace`, `~/dev/devbrain/claude/skills`, `~/dev/devbrain/bin/notion-redact.py` |
 | `openclaw/exec-approvals.json` | (not env-driven — edit the file) | placeholder paths, must be edited to your actual clone path regardless of what you name it |
