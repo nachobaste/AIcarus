@@ -160,9 +160,8 @@ because they were either too bespoke to be useful as a template or squarely
 personal-data territory:
 
 - **Scrapers.** The reference system ran a fleet of scheduled data-collection
-  jobs for one specific business. `lib/schedule.sh`'s manifest-scheduling format
-  is a reasonable pattern to copy if you build your own, but no scraper code
-  ships here.
+  jobs for one specific business. No scraper code ships here; launchd or cron
+  can schedule your own.
 - **Sentry triage.** Bespoke to one org/project's Sentry setup. If you want
   something similar, `sentry-cli` (see the `sentry-cli` Claude Code skill, if
   you have it installed) plus a small wrapper script is the way to go.

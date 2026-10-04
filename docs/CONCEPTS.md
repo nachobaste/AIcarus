@@ -205,6 +205,6 @@ installed using Homebrew won't be protected from this if they write a script tha
 only works on bash 4+. Concretely, this repo avoids: `declare -A` (associative
 arrays — use a `case` statement instead),
 `wait -n`, `${var,,}` case-folding, and `mapfile`. `lib/queue.sh`'s
-`with_timeout` and `lib/schedule.sh`'s manifest parsing both carry comments
-explaining the specific bash-3.2-safe workaround in place — read those before
+`with_timeout` carries a comment explaining the bash-3.2-safe workaround in
+place — read it before
 reaching for a bash 4+ feature that looks like it'd simplify something.

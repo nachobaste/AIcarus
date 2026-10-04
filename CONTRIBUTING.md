@@ -41,9 +41,8 @@ Open an issue or a draft PR describing the gap you found. Useful categories:
   macOS ships bash 3.2 as `/bin/bash` (the shebang execs it directly, ignoring
   `$PATH`, so a newer bash on your `$PATH` won't save a contributor who doesn't
   have one). That means: no `declare -A` (associative arrays), no `wait -n`, no
-  `${var,,}` lowercasing, no `mapfile`. See the comments at the top of
-  `lib/schedule.sh` and `lib/queue.sh` for the specific workarounds already in
-  place (a polling loop instead of a backgrounded watchdog, because a subshell
+  `${var,,}` lowercasing, no `mapfile`. See the comments in `lib/queue.sh`
+  for the specific workarounds already in place (a polling loop instead of a backgrounded watchdog, because a subshell
   can't `wait` on a PID it didn't fork).
 - **Every script that reads or writes outside its own repo names the safeguard
   it's honoring.** `devbrain-verify.commands`, `devbrain-migration-block.list`,
@@ -95,6 +94,4 @@ Per the README's own "What's intentionally NOT in this starter kit" section:
 scrapers, anything Sentry-specific, personal-data digests (email/calendar/task
 briefings), or anything else that's inherently one operator's bespoke setup
 rather than generic machinery. If you built something like that for yourself,
-the right contribution is a short pattern writeup (the way `lib/schedule.sh`'s
-manifest format is described as "copy this if you build your own"), not the code
-itself.
+the right contribution is a short pattern writeup, not the code itself.
