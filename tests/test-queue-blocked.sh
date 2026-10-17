@@ -8,6 +8,7 @@
 # both bin/devbrain (to decide whether to skip the PR flow) and bin/devbrain-night
 # (to decide whether to mark the plan 'blocked' instead of 'failed') call it, so the
 # two can never disagree about what counts as blocked.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -22,13 +23,29 @@ OUT="$(queue_blocked_command "$TMP/clean")"; RC=$?
 [ -z "$OUT" ] || fail "a clean project dir reported a blocked command: $OUT"
 echo "OK: no blocked-by.txt means nothing is reported"
 
-# ---- the file exists: its exact content is reported -------------------------
+# ---- the file exists: the PROGRAM of each line is reported -----------------------
+# Only the first token (after VAR=value prefixes) is published, never arguments or values.
+# The full file stays on disk.
 mkdir -p "$TMP/blocked/.devbrain"
 printf 'deno lint\n' > "$TMP/blocked/.devbrain/blocked-by.txt"
 OUT="$(queue_blocked_command "$TMP/blocked")"; RC=$?
 [ "$RC" -eq 0 ] || fail "a blocked project should still exit 0 (it is a detector, not a failure), got $RC"
-[ "$OUT" = "deno lint" ] || fail "the exact blocked command was not reported verbatim, got: '$OUT'"
-echo "OK: an existing blocked-by.txt reports its exact content"
+[ "$OUT" = "deno" ] || fail "only the program of the blocked command should be reported, got: '$OUT'"
+echo "OK: an existing blocked-by.txt reports the program, not the arguments"
+
+# ---- secrets in the line never come out ---------------------------------------------
+blocked() { printf '%s\n' "$1" > "$TMP/blocked/.devbrain/blocked-by.txt"; queue_blocked_command "$TMP/blocked"; }
+SECRET_VALUE="hunter2-not-a-real-password"
+[ "$(blocked "PGPASSWORD=$SECRET_VALUE psql -h db")" = "psql" ] || fail "a VAR=value prefix must be dropped"
+[ "$(blocked "A=1 B=\"two words\" C='x y' npm run build")" = "npm" ] || fail "quoted VAR=value prefixes must be dropped"
+[ "$(blocked "\$(cat /etc/passwd) x")" = "[HIDDEN]" ] || fail "a command substitution is not a program name"
+[ "$(blocked "\"curl\" --user a:$SECRET_VALUE")" = "[HIDDEN]" ] || fail "a quote is not a program name"
+[ "$(blocked "FOO=bar")" = "[HIDDEN]" ] || fail "assignments only (nothing left) must not leak the value"
+printf 'npm test\n\n  \nsupabase db push --password %s\n' "$SECRET_VALUE" > "$TMP/blocked/.devbrain/blocked-by.txt"
+OUT="$(queue_blocked_command "$TMP/blocked")"
+[ "$OUT" = "$(printf 'npm\nsupabase')" ] || fail "one program per non-empty line expected, got: '$OUT'"
+printf '%s' "$OUT" | grep -qF "$SECRET_VALUE" && fail "the report leaked a value"
+echo "OK: VAR=value prefixes, quotes and substitutions never reach the report"
 
 # ---- an empty blocked-by.txt is NOT a block ---------------------------------
 # A session that touches the file without writing anything is not the same as one

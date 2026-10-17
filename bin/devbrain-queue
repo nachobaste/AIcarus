@@ -1,20 +1,50 @@
-#!/bin/bash
+#!/bin/bash -p
 # devbrain-queue — deterministic manager of ~/dev/queue. NO model calls.
 # Telegram-safe: the LLM router forwards "add X to the queue" here. 'aprobado:' is
-# written by devbrain-interview, devbrain-day, and this file's own 'dale <n>'
-# (day_apply) — all three require a human present in the moment, never
-# unattended. The night runner refuses without it: devbrain-night's next_plan()
-# requires status: approved AND a non-empty aprobado:.
+# written by devbrain-interview, devbrain-day, and this file's own 'dale <n>' (day_apply)
+# and 'approve <n>' (a plan already in the queue) — all of them are meant to be run by a
+# person in the moment, none is scheduled. The night runner refuses without it:
+# devbrain-night's next_plan() requires status: approved AND a non-empty aprobado:. Note
+# that an allowlist entry for this binary grants every verb here, approve included.
+#
+# Two kinds of number, do not mix them up:
+#   dale|no <n>                  n-th pending PROPOSAL of the research backlog (small numbers)
+#   show|approve|deny|change|requeue <n>
+#                                the plan whose `prioridad:` is n (the number the planner
+#                                and the digest print next to each plan)
+#== openclaw-whitelist: start ==
+# When this command is started from the messaging bridge (OpenClaw marks its exec with
+# OPENCLAW_CLI / OPENCLAW_SHELL=exec), drop every inherited shell function and environment
+# variable except a short whitelist, BEFORE anything else runs. Otherwise a variable the
+# caller controls (BASH_ENV, a function export, DEVBRAIN_* path overrides, PATH tricks)
+# could redirect what this script reads or executes. If a variable cannot be dropped, stop.
+case "${OPENCLAW_CLI+x}:${OPENCLAW_SHELL-}" in
+x:*|:exec)
+  POSIXLY_CORRECT=1
+  unset -f compgen echo
+  for _f in $(compgen -A function); do unset -f "$_f"; done
+  for _v in $(compgen -e); do
+    case "$_v" in
+    HOME|PATH|NODE_EXTRA_CA_CERTS|NODE_USE_SYSTEM_CA|OPENCLAW_CLI|OPENCLAW_SHELL|PWD|SHLVL|_) ;;
+    *) unset "$_v" || { echo "whitelist: could not drop $_v" >&2; exit 2; } ;;
+    esac
+  done
+  USER="$(/usr/bin/id -un)"; LOGNAME="$USER"; export USER LOGNAME
+  unset _f _v POSIXLY_CORRECT
+  ;;
+esac
+#== openclaw-whitelist: end ==
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"
 LIB="$(cd "$(dirname "$0")/.." && pwd)/lib"
 source "$LIB/queue.sh"
+source "$LIB/config.sh"
 source "$LIB/day.sh"
 DAY_ENGINE="${DAY_ENGINE:-$LIB/day_engine.py}"; export DAY_ENGINE
 mkdir -p "$QUEUE_DIR"
 
-usage() { echo "usage: devbrain-queue add <repo> \"<task>\" | list | pause <file> | resume <file> | dale <n> | no <n> \"<reason>\""; exit 1; }
+usage() { echo "usage: devbrain-queue add <repo|-> [--fuente telegram] \"<task>\" | list | pause <file> \"<reason>\" | resume <file> | show <n> | approve <n> | requeue <n> | deny <n> \"<reason>\" | change <n>: \"<note>\" | dale <n> | no <n> \"<reason>\""; exit 1; }
 [ $# -ge 1 ] || usage
 
 
@@ -30,30 +60,90 @@ resolve_pending() {
   python3 "$DAY_ENGINE" list < "$backlog" | sed -n "${n}p"
 }
 
+# plan_by_prio <n> -> the ONE queue plan whose `prioridad:` is n (approve/deny/change/...).
+# Not the backlog number `dale <n>` uses: these act on plans already in the queue, and
+# `prioridad:` is the number the planner prints next to each one.
+plan_by_prio() {
+  local f found=""
+  [[ "$1" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: I need the plan number (the #N the planner printed)" >&2; return 2; }
+  for f in "$QUEUE_DIR"/*.plan.md; do
+    [ -f "$f" ] && [ "$(fm_get "$f" prioridad)" = "$1" ] || continue
+    [ -z "$found" ] || { echo "ERROR: more than one plan has priority $1; resolve it by hand" >&2; return 3; }
+    found="$f"
+  done
+  [ -n "$found" ] || { echo "ERROR: there is no plan #$1 in the queue" >&2; return 3; }
+  printf '%s\n' "$found"
+}
+
+# requeue_apply <plan> -> makes a `blocked` plan ready to be approved again: archives
+# bloqueado_por and motivo_fallo (dated) as bloqueado_antes / motivo_antes, deletes the
+# live keys and sets `requested`. It does not touch `aprobado:` (approving stays human).
+# `rama:` (the branch a blocked run pushed) is archived the same way, as rama_antes, and
+# deleted: the old branch is not reused and is not left looking like the next run's branch.
+requeue_apply() {
+  local f="$1" bp mf ra
+  bp="$(fm_get "$f" bloqueado_por)"; mf="$(fm_get "$f" motivo_fallo)"; ra="$(fm_get "$f" rama)"
+  [ -z "$bp" ] || fm_set "$f" bloqueado_antes "$(date +%Y-%m-%d): $bp"
+  [ -z "$mf" ] || fm_set "$f" motivo_antes "$mf"
+  [ -z "$ra" ] || fm_set "$f" rama_antes "$(date +%Y-%m-%d): $ra"
+  fm_del "$f" bloqueado_por
+  fm_del "$f" motivo_fallo
+  fm_del "$f" rama
+  fm_set "$f" status requested
+}
+
 case "$1" in
 add)
   [ $# -ge 3 ] || usage
-  REPO="$2"; TASK="$3"
-  [[ "$REPO" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "ERROR: invalid repo name"; exit 2; }
+  REPO="$2"; shift 2; SOURCE=""
+  if [ "${1:-}" = "--fuente" ]; then
+    [ $# -ge 3 ] || usage
+    SOURCE="$2"; shift 2
+    [[ "$SOURCE" =~ ^[a-z]+$ ]] || { echo "ERROR: invalid --fuente"; exit 2; }
+  fi
+  [ $# -ge 1 ] || usage
+  TASK="$*"   # without the bot's quotes the text still arrives whole
+  # `-`: no repo yet; the owner says it with `change <n>: repo: <name>` (only requests with a source).
+  if [ "$REPO" = "-" ]; then
+    [ -n "$SOURCE" ] || { echo "ERROR: repo '-' only with --fuente (the planner asks the owner)"; exit 2; }
+    FREPO="no-repo"
+  else
+    [[ "$REPO" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "ERROR: invalid repo name"; exit 2; }
+    FREPO="$REPO"
+  fi
   SLUG="$(queue_slugify "$TASK")"
   NN="$(queue_next_nn "$QUEUE_DIR")"
-  F="$QUEUE_DIR/$NN-$REPO--$SLUG.plan.md"
+  F="$QUEUE_DIR/$NN-$FREPO--$SLUG.plan.md"
+  # Exclusive creation: `set -C` makes `>` open with O_EXCL, so if the name already exists
+  # the redirection fails in the same operation that would create it (no window between
+  # looking and writing) and the existing plan is left alone.
+  set -C
   {
     echo "---"
     echo "repo: $REPO"
     echo "status: requested"
     echo "prioridad: $NN"
     echo "creado: $(date +%Y-%m-%d)"
+    [ -z "$SOURCE" ] || echo "fuente: $SOURCE"
     echo "---"
     echo ""
     echo "## Requested task"
     echo ""
     printf '%s\n' "$TASK"
     echo ""
-    echo "(Plan pending: devbrain-interview drafts and approves it.)"
-  } > "$F"
+    if [ -n "$SOURCE" ]; then
+      echo "(Plan pending: devbrain-planner drafts it; approve it with 'approve $NN'.)"
+    else
+      echo "(Plan pending: devbrain-interview drafts and approves it.)"
+    fi
+  } > "$F" || { set +C; echo "ERROR: did not create $(basename "$F") (does it already exist?); an existing plan is never overwritten" >&2; exit 3; }
+  set +C
   queue_commit_and_push "$QUEUE_DIR" "queue: add $REPO — $(basename "$F")"
-  echo "Queued: $(basename "$F") (requested — planned at the next interview)"
+  if [ -n "$SOURCE" ]; then
+    echo "Queued: #$NN $(basename "$F") (requested — devbrain-planner drafts the plan)"
+  else
+    echo "Queued: $(basename "$F") (requested — planned at the next interview)"
+  fi
   ;;
 list)
   printf '%-6s %-14s %-12s %s\n' "PRIO" "REPO" "STATUS" "FILE"
@@ -65,9 +155,19 @@ list)
 pause|resume)
   [ $# -ge 2 ] || usage
   F="$QUEUE_DIR/$2"
+  # <file> is the NAME of a plan in the queue, never a path. Without this, `pause ../x.plan.md`
+  # or `pause /abs/other.md` wrote to any file the user can reach, and a symlink in the queue
+  # made it write through to its target.
+  if ! [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.plan\.md$ ]] || [[ "$2" == *..* ]] || [ -L "$F" ] || { [ -e "$F" ] && [ ! -f "$F" ]; }; then
+    echo "ERROR: '$1' only accepts the name of a plan in the queue: $(basename -- "$2")"; exit 2
+  fi
   [ -f "$F" ] || { echo "ERROR: not found: $2"; exit 4; }
   if [ "$1" = "pause" ]; then
+    # Queue contract: `paused` without a reason is indistinguishable from forgotten.
+    REASON="${*:3}"
+    [ -n "$REASON" ] || { echo "ERROR: 'pause' needs a reason: pause <file> \"<reason>\""; exit 2; }
     fm_set "$F" status_prev "$(fm_get "$F" status)"
+    fm_set "$F" motivo_fallo "$REASON"
     fm_set "$F" status paused
     queue_commit_and_push "$QUEUE_DIR" "queue: pause $2"
     echo "Paused: $2"
@@ -77,6 +177,99 @@ pause|resume)
     queue_commit_and_push "$QUEUE_DIR" "queue: resume $2 (-> ${prev:-requested})"
     echo "Resumed: $2 (→ ${prev:-requested})"
   fi
+  ;;
+show)
+  # Read-only: what the bot shows the owner before `approve <n>`. The body is cut to SHOW_MAX
+  # CHARACTERS (not bytes: plans have accents) so it fits in one Telegram message (4096).
+  [ $# -eq 2 ] || usage
+  F="$(plan_by_prio "$2")" || exit $?
+  TITLE="$(queue_plan_body "$F" | sed -n 's/^# //p' | head -1)"
+  B="$(basename "$F" .plan.md)"; [ -n "$TITLE" ] || TITLE="$(printf '%s' "${B#*--}" | tr '-' ' ')"
+  echo "#$2 $TITLE"
+  echo "repo: $(fm_get "$F" repo) · status: $(fm_get "$F" status)"
+  echo ""
+  queue_plan_body "$F" | recorta "${SHOW_MAX:-3500}" $'\n… (cut; the full plan is in the queue)'
+  ;;
+approve)
+  # Nobody approves on their own: a person runs this, in the moment. A request that came in
+  # through a source (Telegram) is approved only after the planner drafted it (`planificado:`);
+  # one written by hand (no `fuente:`) as always.
+  [ $# -eq 2 ] || usage
+  F="$(plan_by_prio "$2")" || exit $?
+  ST="$(fm_get "$F" status)"
+  [ "$ST" = "requested" ] || { echo "ERROR: #$2 is '$ST'; only a 'requested' plan can be approved"; exit 3; }
+  if [ -n "$(fm_get "$F" fuente)" ] && [ -z "$(fm_get "$F" planificado)" ]; then
+    echo "ERROR: #$2 has no plan yet (the planner is drafting it); a request without a plan is not approved"
+    exit 3
+  fi
+  # Same gate as day_apply: what gets approved has to be able to run. It fails CLOSED.
+  # DAY_PREFLIGHT_BIN exists so tests never look at real checkouts.
+  PF="${DAY_PREFLIGHT_BIN:-$(cd "$(dirname "$0")" && pwd)/devbrain-preflight}"
+  [ -x "$PF" ] || { echo "ERROR: preflight not found at $PF; nothing gets approved without it"; exit 6; }
+  if ! PF_OUT="$("$PF" --plan "$F" 2>&1)"; then
+    echo "#$2 was NOT approved: it does not pass the preflight. Fix it first (change $2: ...):"
+    printf '%s\n' "$PF_OUT"
+    exit 7
+  fi
+  fm_set "$F" aprobado "$(date +%Y-%m-%d)"
+  fm_set "$F" status approved
+  queue_commit_and_push "$QUEUE_DIR" "queue: approve $(basename "$F")"
+  echo "Approved: #$2 $(basename "$F")"
+  ;;
+requeue)
+  # The way out of a `blocked` plan (before, the only way was editing the frontmatter by
+  # hand). Like `approve`: a person runs it, in the moment, and it dispatches nothing. The
+  # preflight runs on a COPY that is already requeued, so if it fails the real plan is not
+  # touched.
+  [ $# -eq 2 ] || usage
+  F="$(plan_by_prio "$2")" || exit $?
+  ST="$(fm_get "$F" status)"
+  [ "$ST" = "blocked" ] || { echo "ERROR: #$2 is '$ST'; only a 'blocked' plan can be requeued"; exit 3; }
+  PF="${DAY_PREFLIGHT_BIN:-$(cd "$(dirname "$0")" && pwd)/devbrain-preflight}"
+  [ -x "$PF" ] || { echo "ERROR: preflight not found at $PF; nothing is requeued without it"; exit 6; }
+  CPDIR="$(mktemp -d)"; CP="$CPDIR/$(basename "$F")"
+  cp "$F" "$CP"; requeue_apply "$CP"
+  PF_RC=0; PF_OUT="$("$PF" --plan "$CP" 2>&1)" || PF_RC=$?
+  rm -rf "$CPDIR"
+  if [ "$PF_RC" -ne 0 ]; then
+    echo "#$2 was NOT requeued: the plan, once requeued, does not pass the preflight. It stays 'blocked', unchanged:"
+    printf '%s\n' "$PF_OUT"
+    exit 7
+  fi
+  requeue_apply "$F"
+  queue_commit_and_push "$QUEUE_DIR" "queue: requeue $(basename "$F")"
+  echo "Requeued: #$2 $(basename "$F") (requested). To run it: devbrain-queue approve $2"
+  ;;
+deny)
+  [ $# -ge 3 ] && [ -n "$(printf '%s' "${*:3}" | tr -d '[:space:]')" ] \
+    || { echo "ERROR: 'deny' needs a reason: deny <n> <reason>"; exit 2; }
+  F="$(plan_by_prio "$2")" || exit $?
+  ST="$(fm_get "$F" status)"
+  case "$ST" in requested|question) ;; *) echo "ERROR: #$2 is '$ST'; only a 'requested' or 'question' plan can be denied"; exit 3 ;; esac
+  fm_set "$F" motivo_fallo "${*:3}"
+  fm_set "$F" status superseded
+  queue_commit_and_push "$QUEUE_DIR" "queue: deny $(basename "$F")"
+  echo "Denied: #$2 $(basename "$F")"
+  ;;
+change)
+  # Also the answer to a `question` from the planner: it goes back to `requested` without
+  # `planificado:`, so the planner drafts it again with the note.
+  # Form: `change <n>: <note>`.
+  shift; ARGS="$*"; N=""; NOTE=""
+  RE_ARGS='^([1-9][0-9]*):[[:space:]]*(.+)$'
+  if [[ "$ARGS" =~ $RE_ARGS ]]; then N="${BASH_REMATCH[1]}"; NOTE="${BASH_REMATCH[2]}"; fi
+  [ -n "$N" ] && [ -n "$(printf '%s' "$NOTE" | tr -d '[:space:]')" ] \
+    || { echo "ERROR: 'change' needs the number and the note, with a colon: change <n>: <note>"; exit 2; }
+  F="$(plan_by_prio "$N")" || exit $?
+  ST="$(fm_get "$F" status)"
+  case "$ST" in requested|question) ;; *) echo "ERROR: #$N is '$ST'; only a 'requested' or 'question' plan can be changed"; exit 3 ;; esac
+  printf '\n## Owner note — %s\n\n%s\n' "$(date +%Y-%m-%d)" "$NOTE" >> "$F"
+  fm_del "$F" planificado
+  fm_del "$F" aprobado
+  fm_del "$F" verificado   # a changed plan is verified again
+  fm_set "$F" status requested
+  queue_commit_and_push "$QUEUE_DIR" "queue: change $(basename "$F")"
+  echo "Noted on #$N: it will be planned again"
   ;;
 dale)
   [ $# -ge 2 ] || usage

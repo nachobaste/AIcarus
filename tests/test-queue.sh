@@ -1,5 +1,6 @@
 #!/bin/bash
 # tests/test-queue.sh
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 export DEVBRAIN_NO_TG=1
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,7 +22,10 @@ f2=$(ls "$DEVBRAIN_QUEUE_DIR"/20-*.plan.md 2>/dev/null | head -1)
 # capture-then-grep: grep -q + pipefail turns list's SIGPIPE into a false failure
 out=$("$Q" list)
 echo "$out" | grep -q "requested" && echo "OK: list shows status" || exit 1
-"$Q" pause "$(basename "$f")"
+! "$Q" pause "$(basename "$f")" >/dev/null 2>&1 && [ "$(fm_get "$f" status)" = "requested" ] \
+  && echo "OK: pause without a reason is refused, status untouched" || exit 1
+"$Q" pause "$(basename "$f")" "waiting on the owner's decision"
+[ "$(fm_get "$f" motivo_fallo)" = "waiting on the owner's decision" ] && echo "OK: pause records motivo_fallo" || exit 1
 [ "$(fm_get "$f" status)" = "paused" ] && echo "OK: pause" || exit 1
 "$Q" resume "$(basename "$f")"
 [ "$(fm_get "$f" status)" = "requested" ] && echo "OK: resume restores requested" || exit 1
