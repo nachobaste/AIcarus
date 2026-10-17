@@ -7,6 +7,7 @@
 # refactorización... solo el respaldo"). The actual fallback LOGIC is exercised live in
 # tests/test-telegram-fallback.sh; this only proves wiki-lint reaches it instead of the
 # bare `openclaw message send` it used before.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WL="$DIR/bin/devbrain-wiki-lint"

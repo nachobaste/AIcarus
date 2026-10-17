@@ -1,6 +1,7 @@
 #!/bin/bash
 # tests/test-devbrain-day.sh — end-to-end devbrain-day: the six "how to verify"
 # cases from the day shift (devbrain-day), each paired with what should NOT happen alongside it.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-day"

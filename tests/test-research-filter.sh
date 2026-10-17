@@ -10,6 +10,7 @@
 #
 # Each rejection assertion is paired with a silence assertion (the discarded
 # text must not reach stdout), following tests/test-devbrain-drift.sh.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/lib/research_filter.py"

@@ -11,6 +11,7 @@
 # shipped-empty devbrain-verify.commands / devbrain-migration-block.list — those
 # ship empty/commented-out by design, so a real starter-kit checkout has nothing
 # to assert against until a user has configured their own repos.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DB="$DIR/bin/devbrain"

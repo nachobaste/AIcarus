@@ -10,6 +10,7 @@
 # for the GitHub API (never hits the network). Same discipline as
 # tests/test-devbrain-drift.sh: pair every detection assertion with a silence
 # assertion, so a script that always prints nothing would not pass this file.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-stacked-pr-check"

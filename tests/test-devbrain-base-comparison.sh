@@ -13,6 +13,7 @@
 #
 # Part 1 builds the exact repo state and proves the two comparisons disagree — without that,
 # the static assertions in part 2 are just string matching against a rule nobody verified.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DB="$DIR/bin/devbrain"

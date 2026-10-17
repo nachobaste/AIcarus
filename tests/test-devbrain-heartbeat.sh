@@ -4,6 +4,7 @@
 # no chat id, so it can only log, never alert. The other probes (launchd, disk,
 # gateway health) read this machine's real state; only the Ollama verdict is
 # asserted.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-heartbeat"

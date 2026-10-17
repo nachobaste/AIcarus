@@ -5,6 +5,7 @@
 # standing in for the GitHub API (never hits the network), every detection
 # assertion paired with a silence assertion so a checker that always prints
 # something (or nothing) would not pass this file.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-repo-audit"

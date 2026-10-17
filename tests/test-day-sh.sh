@@ -3,6 +3,7 @@
 # written file and a git commit. Both bin/devbrain-day and the future Telegram approval
 # call day_apply(); this suite is what proves they cannot diverge, because
 # there is only one function here to diverge FROM.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
