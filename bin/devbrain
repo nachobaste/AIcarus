@@ -1,5 +1,5 @@
-#!/bin/bash
-# devbrain — the ONLY command the Telegram-facing agent is allowed to execute.
+#!/bin/bash -p
+# devbrain — the code loop: plan (read-only) and execute (branch -> reviewed push -> PR).
 # Two modes: plan (propose only, touches nothing) and execute (branch -> PR).
 # Design: see README.md (propose-only loop). Version-controlled alongside this repo.
 # Model split: a stronger model plans and reviews (judgment), another one executes.
@@ -7,6 +7,28 @@
 # (lib/models.sh; DEVBRAIN_PLAN_MODEL / DEVBRAIN_EXEC_MODEL and *_EFFORT still work).
 # Pin exact model IDs, not the "opus"/"sonnet" aliases: an alias resolves to whatever
 # the family's current default is, and a new release can change it under you.
+#== openclaw-whitelist: start ==
+# When this command is started from the messaging bridge (OpenClaw marks its exec with
+# OPENCLAW_CLI / OPENCLAW_SHELL=exec), drop every inherited shell function and environment
+# variable except a short whitelist, BEFORE anything else runs. Otherwise a variable the
+# caller controls (BASH_ENV, a function export, DEVBRAIN_* path overrides, PATH tricks)
+# could redirect what this script reads or executes. If a variable cannot be dropped, stop.
+case "${OPENCLAW_CLI+x}:${OPENCLAW_SHELL-}" in
+x:*|:exec)
+  POSIXLY_CORRECT=1
+  unset -f compgen echo
+  for _f in $(compgen -A function); do unset -f "$_f"; done
+  for _v in $(compgen -e); do
+    case "$_v" in
+    HOME|PATH|NODE_EXTRA_CA_CERTS|NODE_USE_SYSTEM_CA|OPENCLAW_CLI|OPENCLAW_SHELL|PWD|SHLVL|_) ;;
+    *) unset "$_v" || { echo "whitelist: could not drop $_v" >&2; exit 2; } ;;
+    esac
+  done
+  USER="$(/usr/bin/id -un)"; LOGNAME="$USER"; export USER LOGNAME
+  unset _f _v POSIXLY_CORRECT
+  ;;
+esac
+#== openclaw-whitelist: end ==
 set -euo pipefail
 
 # Resolve the claude binary BEFORE narrowing PATH. The narrow PATH below is deliberate
@@ -16,6 +38,10 @@ set -euo pipefail
 # installer's location when the interactive PATH does not have it either (launchd/cron).
 CLAUDE_BIN="${DEVBRAIN_CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# The gh binary is overridable for the same reason as CLAUDE_BIN: the PATH above is narrow on
+# purpose, so a test (or a nonstandard install) cannot reach a different gh through PATH.
+GH_BIN="${DEVBRAIN_GH_BIN:-gh}"
+gh() { command "$GH_BIN" "$@"; }
 PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
 HOUSE_RULES="${DEVBRAIN_HOUSE_RULES:-$HOME/dev/CLAUDE.md}"
 # Hard guardrail: allowlist (not denylist) of projects devbrain may touch.
@@ -111,6 +137,65 @@ on_fail() {
   tg_alert "🚨 devbrain failed (code $code) during ${MODE_LABEL:-task}. Nothing touched your data or production; the work is left on a local branch. Review or retry."
 }
 
+# --- Every push of the branch goes through a secret review ---------------------------------
+# Work stopped by a missing permission used to evaporate (it was never committed, and a dirty
+# shared checkout then blocked the next run), and a pushed branch is never deleted: anything
+# secret-shaped that gets pushed stays in its history. So: the blocked path commits its work
+# and pushes the branch (no reviewer, no PR), the PR path pushes it too, and BOTH only through
+# review_and_push, which reads every commit of origin/<base>..HEAD with lib/secret_patterns.py.
+#
+# .devbrain/push-result.txt is what devbrain-night reads to write `rama:` and the alert. Only
+# this script writes it, after the session: `rama: <branch>` if the push exited 0, or
+# `not pushed: <reason>`. Nothing the session prints counts.
+PUSH_REASON=""
+# FULL refs: a bare `origin/<base>` is won by a LOCAL branch called origin/<base> (git resolves
+# refs/heads before refs/remotes), and a session can create one with `git fetch .`.
+BASE_REF=""; BASE_FETCH_FAILED=""
+# A session can move refs/remotes/origin/<base> with `git fetch . +<sha>:refs/remotes/...` (the
+# `git fetch` grant allows it): the review would only see what comes after it and the push
+# would upload the WHOLE history. After the session the script refreshes it against the real
+# origin; if it cannot, the review and the push fail closed and the work is assumed to be its own.
+refresh_base() {
+  BASE_REF="refs/remotes/origin/$DEFAULT_BRANCH"
+  git fetch -q origin "+refs/heads/$DEFAULT_BRANCH:$BASE_REF" 2>/dev/null || BASE_FETCH_FAILED=1
+}
+write_push_result() { # <line> -> .devbrain/push-result.txt (best effort)
+  { mkdir -p .devbrain && printf '%s\n' "$1" > .devbrain/push-result.txt; } 2>/dev/null || true
+}
+# Does the branch have commits of its own against origin/<base>? If that cannot be compared,
+# assume it does: the review and the push fail closed on their own.
+has_own_work() {
+  local c
+  [ -z "$BASE_FETCH_FAILED" ] || return 0
+  c="$(git rev-list "$BASE_REF..HEAD" 2>/dev/null)" || return 0
+  [ -n "$c" ]
+}
+# The ONLY way this branch leaves the machine. First it reads EVERY commit of origin/<base>..HEAD
+# (lib/secret_patterns.py with `-I`: neither PYTHONPATH nor any variable changes which module or
+# interpreter loads it; .env names, key patterns and commit messages on both paths; binaries and
+# data files only on the blocked path). It fails closed: if the review cannot run, that counts as
+# a finding. It never prints a value, only file and kind. Then it pushes with an explicit refspec
+# and --no-verify (a repo hook does not run on this script's push).
+# Returns 0 if it pushed, 1 if the push failed, 2 if the review stopped it (PUSH_REASON says why).
+review_and_push() { # <blocked|ok>
+  local findings rc=0
+  if [ -n "$BASE_FETCH_FAILED" ]; then
+    PUSH_REASON="(review) could not update origin/$DEFAULT_BRANCH"
+    return 2
+  fi
+  findings="$(python3 -I "$ROOT/lib/secret_patterns.py" review "$BASE_REF" "$1" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ -n "$findings" ] || findings="$(printf '(review)\tcould not run')"
+    PUSH_REASON="$(printf '%s\n' "$findings" | awk -F'\t' '{printf "%s%s (%s)", (NR > 1 ? "; " : ""), $1, $2}' | cut -c1-300)"
+    return 2
+  fi
+  if ! git push -q -u --no-verify origin "refs/heads/$BRANCH:refs/heads/$BRANCH" 2>/dev/null; then
+    PUSH_REASON="push failed"
+    return 1
+  fi
+  return 0
+}
+
 [ $# -ge 1 ] || usage
 MODE="$1"
 
@@ -197,6 +282,9 @@ execute)
     echo "ERROR: no stored plan. Run: devbrain plan $PROJECT \"<task>\" first."; exit 6
   fi
   TASK="$(cat .devbrain/task-latest.txt)"
+  # A result left by an earlier run must never outlive it: devbrain-night would read an old
+  # `rama:` after an early exit (dirty tree, no commits, ...) and attach it to this plan.
+  rm -f .devbrain/push-result.txt
   MODE_LABEL="execution of \"$TASK\" ($PROJECT)"; trap on_fail EXIT
   ack "🛠️ Executing on $PROJECT: \"$TASK\". Takes a few minutes — I'll ping the PR link. (If this is NOT what you asked for, reply 'cancel'.)"
   # deterministic scaffolding: clean state, fresh branch off main.
@@ -242,6 +330,7 @@ execute)
   # A leftover blocked-by.txt from an earlier, unrelated attempt must never cause a
   # false positive on this run — clear it before the session can write one.
   rm -f .devbrain/blocked-by.txt
+  SESSION_RC=0
 
   {
     printf 'Read the house rules at %s. You are on branch %s of project %s.\n' "$HOUSE_RULES" "$BRANCH" "$PROJECT"
@@ -252,24 +341,48 @@ execute)
     printf 'WHEN DONE, update ~/dev/wiki/status/%s.md following that directory'"'"'s template.\n' "$PROJECT"
     printf 'Do NOT push, do NOT touch main, do NOT deploy. At the end, reply with a short summary of what you did.\n'
     printf 'Verification inside a subdirectory (e.g. "npm run build" in frontend/): run `%s/bin/devbrain-verify-run %s <command>` as ONE Bash call with nothing else on the line (no cd, &&, ;, echo, bash -c, or extra arguments). That script does the cd itself, so it works no matter which directory your shell is in and can be called several times in a row. Example: `%s/bin/devbrain-verify-run %s npm run build`. A command not declared for this repo is rejected; if you need it, write it to .devbrain/blocked-by.txt as described next.\n' "$ROOT" "$PROJECT" "$ROOT" "$PROJECT"
-    printf 'If you need to run a verification command (build/lint/test/typecheck) and permission denies it, do NOT retry another way and do NOT skip it silently: write the EXACT command you needed into .devbrain/blocked-by.txt (one line, the command exactly as you tried it) and stop your verification there — keep implementing the rest of the plan normally. A human decides whether to grant that permission.\n'
+    printf 'NEVER put environment variables in front of a command (`VAR=value command`): the permission matches the command from its first token, so it is denied even when the command itself is granted.\n'
+    printf 'If you need to run a verification command (build/lint/test/typecheck) and permission denies it, do NOT retry another way and do NOT skip it silently: write the EXACT command you tried and the permission denied into .devbrain/blocked-by.txt (one line, as you tried it) WITH THE Write TOOL, not with Bash (`mkdir && printf >` is rejected whole and the file is never created). A command you did not try does not go there: try it first. Stop your verification there — keep implementing the rest of the plan normally. A human decides whether to grant that permission.\n'
   } | with_timeout 2700 "$CLAUDE_BIN" -p "${EXEC_ARGS[@]}" --permission-mode acceptEdits \
     --disallowedTools "mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)${EXTRA_DISALLOWED}" \
-    --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(npm test:*),Bash(node test.js),Bash(npx tsc:*),Bash(ls:*),Bash(mkdir:*)$(verify_tools_for "$PROJECT")"
+    --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git fetch:*),Bash(gh pr list:*),Bash(npm test:*),Bash(node test.js),Bash(npx tsc:*),Bash(ls:*),Bash(mkdir:*)$(verify_tools_for "$PROJECT")" \
+    || SESSION_RC=$?
+  # push-result.txt is written by this script and nothing else. Whatever the session left there
+  # (in .devbrain/, where it can write) is deleted the moment it ends, also if it exited with an
+  # error: otherwise a forged file would reach `rama:` on the plan. The session's exit code is
+  # kept as it is (`set -e` used to supply it).
+  rm -f .devbrain/push-result.txt
+  [ "$SESSION_RC" -eq 0 ] || exit "$SESSION_RC"
+  refresh_base
 
-  # A blocked session never reaches the PR flow: no partial push, no review, no PR
-  # for work that stopped because a permission was missing. The exact command lands
-  # on the queue plan via devbrain-night, which reads this same file.
-  BLOCKED_CMD="$(queue_blocked_command "$DIR")"
-  if [ -n "$BLOCKED_CMD" ]; then
-    echo "BLOCKED: $BLOCKED_CMD"
-    exit 9
-  fi
-
-  # commit any leftovers, push, open PR (script keeps the deterministic parts)
+  # Commit leftovers BEFORE the blocked exit, not after. A blocked session used to exit before
+  # the commit and leave its work as loose files in the checkout, where it was lost (and a dirty
+  # tree stopped the next run). `git add -A` also takes UNTRACKED files, which is exactly the
+  # case that got lost. `.devbrain/` is in the repo's .gitignore, so scratch files stay out.
   if [ -n "$(git status --porcelain)" ]; then
     git add -A && git commit -q -m "devbrain: task changes"
   fi
+
+  # A blocked session (a verification permission was missing) never reaches the reviewer or the
+  # PR. It does push its branch, but only if it has commits of its own and only through the
+  # secret review; the result lands in push-result.txt, which devbrain-night reads. The command
+  # that was missing lands on the queue plan via devbrain-night, which reads blocked-by.txt.
+  BLOCKED_CMD="$(queue_blocked_command "$DIR")"
+  if [ -n "$BLOCKED_CMD" ]; then
+    echo "BLOCKED: $BLOCKED_CMD"
+    if ! has_own_work; then
+      write_push_result "not pushed: no work of its own"
+      echo "Branch not pushed: there are no commits of its own."
+    elif review_and_push blocked; then
+      write_push_result "rama: $BRANCH"
+      echo "Branch pushed: $BRANCH"
+    else
+      write_push_result "not pushed: $PUSH_REASON"
+      echo "Branch not pushed: $PUSH_REASON. The commit stays local on branch $BRANCH."
+    fi
+    exit 9
+  fi
+
   # origin/, not the bare local branch: a stale local base makes an empty branch look
   # productive — this guard would pass on a branch with no commits of its own just
   # because the local main was behind, and a reviewer could then reject code that had
@@ -305,17 +418,38 @@ execute)
   fi
   VERDICT_LINE="$(head -1 "$REVIEW_FILE")"
 
-  git push -q -u origin "$BRANCH"
+  # Same review and same push as the blocked path, but binaries and data files are allowed (the
+  # reviewer above and you in the PR look at them). If the review stops the push there is no PR,
+  # and the exit code is its own (11).
+  if review_and_push ok; then
+    write_push_result "rama: $BRANCH"
+  else
+    PUSH_RC=$?
+    write_push_result "not pushed: $PUSH_REASON"
+    if [ "$PUSH_RC" -eq 2 ]; then
+      echo "ERROR: push stopped by the secret review: $PUSH_REASON. Nothing left this machine; the commit stays on branch $BRANCH."
+      echo "If it is a false positive: look at the file on that branch and, if it is fine, push yourself: git push -u origin $BRANCH && gh pr create --base $DEFAULT_BRANCH --head $BRANCH"
+      exit 11
+    fi
+    echo "ERROR: pushing branch $BRANCH failed (network or remote)."; exit 1
+  fi
   # --base below takes a branch NAME, not a remote-tracking ref. The guard above and
   # the reviewer diff DO use origin/ (a stale local base can hide an empty branch),
   # but prefixing this one would break `gh pr create`. Do not "fix" all three the same way.
   PR_URL="$(gh pr create --title "devbrain: $TASK" \
     --body "$(printf '## 🔎 Automatic review (adversarial verifier)\n\n%s\n\n---\n\nRequested via Telegram.\n\n## Approved plan\n\n%s\n\n---\nReview and merge from the GitHub app. Generated by the propose-only loop; the review above is a second agent'"'"'s pass, it does NOT replace your own review.' "$(cat "$REVIEW_FILE")" "$(cat .devbrain/plan-latest.md)")" \
-    --base "$DEFAULT_BRANCH" --head "$BRANCH" 2>&1 | tail -1)"
-  # commit any wiki updates the session left behind (it can't do this itself unattended)
+    --base "$DEFAULT_BRANCH" --head "$BRANCH" 2>&1)" || {
+    # `| tail -1` used to hide the exit code and, under pipefail, kill the script without a cause;
+    # devbrain-night then stored just "exit 1: remote:". Now the full stderr reaches the log.
+    echo "ERROR: creating the PR failed (gh pr create): $PR_URL"; exit 10
+  }
+  PR_URL="$(printf '%s\n' "$PR_URL" | tail -1)"
+  # commit any wiki updates the session left behind (it can't do this itself unattended).
+  # The PR already exists: a failure here is logged and never takes the plan's result down.
   if [ -n "$(git -C "$HOME/dev/wiki" status --porcelain 2>/dev/null)" ]; then
-    git -C "$HOME/dev/wiki" add -A
-    git -C "$HOME/dev/wiki" commit -q -m "wiki: ingest devbrain task ($PROJECT)"
+    { git -C "$HOME/dev/wiki" add -A \
+      && git -C "$HOME/dev/wiki" commit -q -m "wiki: ingest devbrain task ($PROJECT)"; } 2>&1 \
+      || echo "WARN: the wiki commit failed (the PR was already created): $?"
     git -C "$HOME/dev/wiki" push -q 2>/dev/null || true
   fi
   echo ""
