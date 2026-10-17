@@ -1,0 +1,32 @@
+#!/bin/bash
+# devbrain-conf-get <file.json|file.yaml> <dotted.key>
+# Prints ONLY the scalar value of one named key. Refuses (exit 2) when any key
+# segment looks like a secret, or when the value is an object/list, so it can
+# never print a subtree. Safe route for sessions to read e.g.
+# agents.defaults.model.primary from openclaw.json. See claude/hooks/README.md.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+[ $# -eq 2 ] || { echo "usage: devbrain-conf-get <file> <dotted.key>" >&2; exit 64; }
+python3 - "$1" "$2" <<'PY'
+import json, re, subprocess, sys
+f, key = sys.argv[1], sys.argv[2]
+DENY = r"key|token|secret|password|pass|credential|auth|bearer|cookie|private|dsn"
+segs = key.split(".")
+bad = next((s for s in segs if re.search(DENY, s, re.I)), None)
+if bad:
+    print(f"refused: key segment '{bad}' looks like a secret", file=sys.stderr); sys.exit(2)
+try:
+    if re.search(r"\.ya?ml$", f):
+        try:
+            import yaml; d = yaml.safe_load(open(f))
+        except ImportError:  # no PyYAML on this machine: yq is installed
+            d = json.loads(subprocess.check_output(["yq", "-o=json", ".", f]))
+    else:
+        d = json.load(open(f))
+    for s in segs:
+        d = d[int(s)] if isinstance(d, list) else d[s]
+except (OSError, KeyError, IndexError, ValueError, subprocess.CalledProcessError) as e:
+    print(f"not found/unreadable: {type(e).__name__}", file=sys.stderr); sys.exit(1)
+if isinstance(d, (dict, list)):
+    print("refused: value is an object/list, name a leaf key", file=sys.stderr); sys.exit(2)
+print(d)
+PY
