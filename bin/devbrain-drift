@@ -28,6 +28,9 @@ import subprocess
 import sys
 import urllib.parse
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+from secret_patterns import find_secret  # noqa: E402
+
 HOME = os.path.expanduser("~")
 SNAPSHOT = os.environ.get("DRIFT_SNAPSHOT", f"{HOME}/dev/devbrain/openclaw/workspace")
 LIVE = os.environ.get("DRIFT_LIVE", f"{HOME}/dev/scratch/openclaw-workspace")
@@ -57,17 +60,13 @@ RUNTIME_ONLY = {"openclaw-workspace-state.json"}
 
 # The person-name redactor. This check needs the redacted text back to diff
 # against the original, not just a pass/fail exit code.
-NOTION_REDACT_BIN = os.environ.get(
-    "NOTION_REDACT_BIN", f"{HOME}/dev/devbrain/bin/notion-redact.py")
+REDACT_NAMES_BIN = os.environ.get(
+    "REDACT_NAMES_BIN", f"{HOME}/dev/devbrain/bin/redact-names.py")
 
 SKILL_FRONTMATTER_ALLOWED_KEYS = {"name", "description"}
 
-SECRET_PATTERNS = re.compile(
-    r"sk-[A-Za-z0-9]{10,}"
-    r"|AKIA[0-9A-Z]{16}"
-    r"|-----BEGIN[ A-Z]*PRIVATE KEY-----"
-    r"|://[^/\s:]+:[^/\s@]+@"
-)
+# Secret-shaped strings: lib/secret_patterns.py, shared with bin/devbrain's pre-push
+# review. One definition, no copy here.
 
 # $HOME/... and ~/... both require a trailing slash so this doesn't match an
 # unrelated "~40 files" approximation in prose. /Users/<user>/... requires at
@@ -207,20 +206,20 @@ def skill_url_domain_allowed(domain):
 
 
 def redact_skill_body(body):
-    """Runs bin/notion-redact.py over `body` and reports whether it redacted
+    """Runs bin/redact-names.py over `body` and reports whether it redacted
     anything. Returns None (not True/False) when the redaction subsystem
     itself is unavailable — missing redactor, missing/empty names file — so
     the caller can skip the sub-check instead of treating infrastructure
     absence as either a finding or a crash (the redactor exits 2 on a
     missing/empty names file); devbrain-drift does not fail on either.
     """
-    if not os.path.isfile(NOTION_REDACT_BIN):
+    if not os.path.isfile(REDACT_NAMES_BIN):
         print(f"devbrain-drift: skill name check skipped, redactor not found "
-              f"at {NOTION_REDACT_BIN}", file=sys.stderr)
+              f"at {REDACT_NAMES_BIN}", file=sys.stderr)
         return None
     try:
         proc = subprocess.run(
-            [sys.executable, NOTION_REDACT_BIN, "--text"],
+            [sys.executable, REDACT_NAMES_BIN, "--text"],
             input=body, capture_output=True, text=True, timeout=10,
         )
     except OSError as exc:
@@ -265,7 +264,7 @@ def check_skill_content():
             for key in sorted(keys - SKILL_FRONTMATTER_ALLOWED_KEYS):
                 out.append(("skill-content", f"frontmatter-extra-key\t{rel}\t{key}"))
 
-        if SECRET_PATTERNS.search(body):
+        if find_secret(body):
             out.append(("skill-content", f"possible-secret\t{rel}"))
 
         redacted = redact_skill_body(body)

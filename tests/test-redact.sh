@@ -1,9 +1,10 @@
 #!/bin/bash
-# tests/test-redact.sh — exercises bin/notion-redact.py (the person-name redactor
+# tests/test-redact.sh — exercises bin/redact-names.py (the person-name redactor
 # devbrain-drift uses).
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-redact_names() { python3 "$DIR/bin/notion-redact.py" --text; }
+redact_names() { python3 "$DIR/bin/redact-names.py" --text; }
 
 # redact_names — the name list lives OUTSIDE this repo (see Global Constraints).
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
