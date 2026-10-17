@@ -3,6 +3,7 @@
 #
 # Each case is one way a night can be lost before it starts. If one stops being detected,
 # that failure costs a whole day again.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 PF="$(cd "$(dirname "$0")/.." && pwd)/bin/devbrain-preflight"
 export DEVBRAIN_PREFLIGHT_NO_FETCH=1
@@ -20,6 +21,9 @@ setup() { # leaves a clean, valid scenario in $T
   rm -rf "$T"; mkdir -p "$T/queue" "$T/config" "$T/projects/demo"
   git -C "$T/projects/demo" init -q 2>/dev/null
   git -C "$T/projects/demo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+  # demo declares a plain `npm test`: --check now reviews it, so the test repo has to satisfy it.
+  printf "package.json\nnode_modules/\n" >> "$T/projects/demo/.git/info/exclude"
+  printf '{"scripts":{"test":"true"}}\n' > "$T/projects/demo/package.json"; mkdir "$T/projects/demo/node_modules"
   printf 'demo\n' > "$T/config/devbrain-projects.allow"
   printf 'demo=npm test\n' > "$T/config/devbrain-verify.commands"
   printf -- '---\nrepo: demo\nstatus: approved\nprioridad: 10\ncreado: 2026-09-14\naprobado: 2026-09-14\n---\n\nA test task.\n' > "$T/queue/10-demo--task.plan.md"
@@ -37,7 +41,7 @@ setup; printf 'other=npm test\n' > "$T/config/devbrain-verify.commands"
        check "a repo with no verification command"       1 "NO command"
 setup; rm -rf "$T/projects/demo"
        check "a missing checkout"                        1 "no checkout"
-setup; sed -i '' 's/^status: approved/status: solicitado/' "$PLAN"
+setup; sed -i '' 's/^status: approved/status: requested/' "$PLAN"
        check "no approved plans warns and passes"        0 "no approved plans"
 
 # check 5/7: commands that are never granted
@@ -64,6 +68,14 @@ setup; echo 'frontend/' >> "$T/projects/demo/.git/info/exclude"; mkdir -p "$T/pr
 setup; sed -i '' 's/^aprobado:.*/&\nbloqueado_por: make deploy-check/' "$PLAN"
        check "a plan blocked before on a still-ungranted command" 1 "already blocked"
 
+# the VAR=value prefix of an older block is ignored when comparing with the grant
+setup; printf 'demo=npm test,make deploy-check\n' > "$T/config/devbrain-verify.commands"
+       sed -i '' 's/^aprobado:.*/&\nbloqueado_por: PGPASSWORD=x FOO="a b" make deploy-check/' "$PLAN"
+       check "a block stored with a VAR=value prefix compares without it" 0 "--"
+setup; printf 'demo=npm test,make deploy-check\n' > "$T/config/devbrain-verify.commands"
+       sed -i '' 's/^aprobado:.*/&\nbloqueado_por: PGPASSWORD=x make other-thing/' "$PLAN"
+       check "the prefix does not make an ungranted command look granted" 1 "already blocked"
+
 # check 8: what bin/devbrain refuses regardless of any allowlist
 setup; printf 'demo\n' > "$T/config/devbrain-migration-block.list"; printf '\nWrite a migration that adds the column.\n' >> "$PLAN"
        check "a migration write in a migration-blocked repo" 1 "migration"
@@ -74,9 +86,9 @@ plan_only() { # <name> <expected> <pattern>
   if [ "$got" = "$2" ] && { [ "$3" = "--" ] || grep -qi -- "$3" <<<"$out"; }; then ok=$((ok+1)); printf '  ok   %s\n' "$1"
   else bad=$((bad+1)); printf '  BAD  %s (rc=%s, expected %s)\n    %s\n' "$1" "$got" "$2" "$out"; fi
 }
-setup; sed -i '' 's/^status: approved/status: solicitado/;/^aprobado:/d' "$PLAN"
+setup; sed -i '' 's/^status: approved/status: requested/;/^aprobado:/d' "$PLAN"
        plan_only "--plan: a healthy draft passes even if not approved" 0 "--"
-setup; sed -i '' 's/^status: approved/status: solicitado/;/^aprobado:/d' "$PLAN"; printf '\nRun `npm install`.\n' >> "$PLAN"
+setup; sed -i '' 's/^status: approved/status: requested/;/^aprobado:/d' "$PLAN"; printf '\nRun `npm install`.\n' >> "$PLAN"
        plan_only "--plan: a draft that asks for npm install is refused" 1 "npm install"
 setup; echo junk > "$T/projects/demo/stray.txt"
        plan_only "--plan: a dirty checkout is refused too" 1 "dirty"

@@ -52,8 +52,10 @@ def subdir_ok(subdir):
     return not any(p in ("..", ".", "") for p in subdir.split("/"))
 
 
-def declared(repo):
-    """[(command, subdir)] for the repo's `cmd@subdir` entries, already validated."""
+def declared(repo, with_root=False):
+    """[(command, subdir)] for the repo's `cmd@subdir` entries, already validated.
+    With `with_root`, entries without `@` that are `npm ...` or `npx ...` come in with subdir
+    "." (only for --check: the session runs those in its own shell, not this script)."""
     salida = []
     try:
         lines = open(VERIFY_FILE, encoding="utf-8").read().splitlines()
@@ -68,6 +70,8 @@ def declared(repo):
         for entry in rest.split(","):
             entry = entry.strip()
             if "@" not in entry:
+                if with_root and entry.startswith(("npm ", "npx ")):
+                    salida.append((entry, "."))
                 continue
             cmd, _, sub = entry.rpartition("@")
             cmd, sub = cmd.strip(), sub.strip()
@@ -96,7 +100,7 @@ def resolve(repo_dir, sub):
 def check(repo):
     repo_dir = repo_dir_of(repo)
     bad = 0
-    entries = declared(repo)
+    entries = declared(repo, with_root=True)
     for cmd, sub in entries:
         d = resolve(repo_dir, sub)
         if d is None:
@@ -131,10 +135,11 @@ def check(repo):
                       f"run `npm ci` interactively; nothing gets installed unattended")
                 bad += 1
                 continue
-            if toks[:2] == ["npm", "run"] and len(toks) >= 3:
-                scripts = meta.get("scripts", {})
-                if toks[2] not in scripts:
-                    print(f"FAIL {repo}: `{cmd}@{sub}` -- {sub}/package.json does not define the script `{toks[2]}`")
+            script = toks[2] if toks[:2] == ["npm", "run"] and len(toks) >= 3 else \
+                "test" if toks[:2] in (["npm", "test"], ["npm", "t"]) else None
+            if script:
+                if script not in meta.get("scripts", {}):
+                    print(f"FAIL {repo}: `{cmd}@{sub}` -- {sub}/package.json does not define the script `{script}`")
                     bad += 1
                     continue
         print(f"ok   {repo}: `{cmd}` in {sub}/")

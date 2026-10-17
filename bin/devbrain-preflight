@@ -25,6 +25,12 @@ WHAT IT LOOKS AT, and each check comes from a real failure
      regardless of any allowlist (a migration write in a repo listed in
      devbrain-migration-block.list, or a write against a production database).
 
+QUEUE CONTRACT (checked over the WHOLE queue on every run without --plan, approved or not):
+  C1. `status: done` needs `pr: <url>` or `sin_pr: <reason>` (a plan closed without code).
+  C2. `status: paused` needs `motivo_fallo: <reason>` (the field devbrain-night writes when it
+      pauses, and `devbrain-queue pause` now requires too).
+A state that does not say why is indistinguishable from a forgotten plan.
+
 `--plan <file>` checks ONE plan (approved or not) with the same checks. day_apply
 uses it before writing `aprobado:`, so a plan that cannot run is refused while you are
 sitting there, not at 23:00.
@@ -70,6 +76,14 @@ def split_multi(value):
     return [c for c in value.split(" ‖ ") if c]
 
 
+def strip_env_prefix(cmd):
+    # A leading `VAR=value ` makes the permission matcher lose the grant (it compares from the
+    # first token), and the session prompt already forbids it. What an older run stored in
+    # `bloqueado_por` can still carry one, and it will never equal the grant, so it is
+    # compared without the prefix.
+    return re.sub(r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+)+", "", cmd.strip())
+
+
 def command_granted(granted_raw, candidate):
     # Same logic as verify_tools_for in bin/devbrain: comma-separated entries,
     # "cmd@subdir" is composed as "cd <subdir> && <cmd>" before comparing, and a
@@ -89,6 +103,34 @@ def command_granted(granted_raw, candidate):
         elif candidate == entry:
             return True
     return False
+
+
+def contract(text):
+    """The queue-contract violation of one plan, or "" if it complies. Looks only at the
+    frontmatter: `fm()` searches the whole file and its `\\s*` crosses lines."""
+    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    head = m.group(1) if m else ""
+
+    def field(k):
+        c = re.search(rf"^{k}:[ \t]*(.*)$", head, re.M)
+        return c.group(1).strip() if c else ""
+    st = field("status")
+    if st == "done" and not (field("pr") or field("sin_pr")):
+        return "is `done` with neither `pr:` nor `sin_pr: <reason>`"
+    if st == "paused" and not field("motivo_fallo"):
+        return "is `paused` without `motivo_fallo: <reason>`"
+    return ""
+
+
+def queue_contract():
+    out = []
+    for f in sorted(os.listdir(QUEUE)) if os.path.isdir(QUEUE) else []:
+        if not f.endswith(".plan.md"):
+            continue
+        v = contract(open(os.path.join(QUEUE, f), encoding="utf-8", errors="replace").read())
+        if v:
+            out.append(f"{f[:-8]}: {v} (queue contract).")
+    return out
 
 
 def behind_origin(d, branch="main"):
@@ -116,6 +158,11 @@ def main(argv):
         if not os.path.isfile(only):
             print(f"preflight: no such plan: {only}", file=sys.stderr)
             return 2
+
+    # The queue contract does not depend on any plan being approved: it is checked on every
+    # run without --plan, and it goes first so a long list does not bury it.
+    if not only:
+        problems += queue_contract()
 
     # 1. This checkout first: the permissions come from it.
     behind = behind_origin(ROOT)
@@ -188,7 +235,7 @@ def main(argv):
         # specific command is still not granted, approving it again ends exactly the same.
         previous = fm(t, "bloqueado_por")
         if previous:
-            for cmd in split_multi(previous):
+            for cmd in map(strip_env_prefix, split_multi(previous)):
                 if not command_granted(commands.get(repo, ""), cmd):
                     problems.append(
                         f"{name}: it already blocked on `{cmd}` and that command is still not in "
