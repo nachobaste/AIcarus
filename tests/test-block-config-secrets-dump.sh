@@ -58,6 +58,12 @@ suite() {  # HOOKUT HELPERUT
   hk block_sed_w_command 2 "$(json_bash "sed -i '' -e 'w /dev/stdout' apps/web/.env")"
   hk block_sed_s_w_flag 2 "$(json_bash "sed -i 's/a/b/w /dev/stdout' apps/web/.env")"
   hk block_mv_out 2 "$(json_bash "mv openclaw.json /tmp/x; cat /tmp/x")"
+  hk block_python_module_on_protected 2 "$(json_bash "python3 -m json.tool /home/x/.openclaw/openclaw.json")"
+  hk block_python_script_is_env 2 "$(json_bash "python3 apps/web/.env")"
+  hk block_git_archive_add_file 2 "$(json_bash "git archive --add-file=apps/web/.env HEAD")"
+  hk allow_python_plain_script 0 "$(json_bash "python3 scripts/build.py --fast")"
+  hk allow_git_log 0 "$(json_bash "git log --oneline -5")"
+  hk allow_ls_plain 0 "$(json_bash "ls -la apps/web")"
   hk failclosed_malformed_input 2 "this is not json"
   hk failclosed_not_an_object 2 "[1, 2]"
   hk allow_mv_into 0 "$(json_bash "mv /tmp/new.env /home/x/dev/app/.env")"
@@ -92,8 +98,8 @@ suite "$HOOK" "$HELPER"; unset DEVBRAIN_SECRET_PATH_RE DEVBRAIN_SECRET_CMD_RE
 echo "red: $(names)"
 case " $FAILED " in *" block_cat "*) ;; *) echo "FAIL: canary: block_cat did not go red"; exit 1;; esac
 echo "$FAILED" | tr ' ' '\n' | grep . | grep -v '^block_' && { echo "FAIL: canary: a non-block test went red"; exit 1; }
-[ "$(echo "$FAILED" | wc -w)" -eq 21 ] || { echo "FAIL: canary: expected all 21 block_* red, got $(echo "$FAILED" | wc -w)"; exit 1; }
-echo "OK: canary 1 (hook disabled -> all 21 block_* red, no allow_*/helper_*/failclosed_* red)"
+[ "$(echo "$FAILED" | wc -w)" -eq 24 ] || { echo "FAIL: canary: expected all 24 block_* red, got $(echo "$FAILED" | wc -w)"; exit 1; }
+echo "OK: canary 1 (hook disabled -> all 24 block_* red, no allow_*/helper_*/failclosed_* red)"
 
 echo "== canary 2: 'key' removed from helper deny list -> only helper_refuses_apiKey red =="
 sed 's/DENY = r"key|/DENY = r"/' "$HELPER" > "$TMP/helper-mutant"

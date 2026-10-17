@@ -20,6 +20,7 @@
 #   8  the session moves refs/remotes/origin/<base> to HEAD: the review still finds the key
 #   9  origin cannot be refreshed: the review fails closed, nothing is pushed
 #  10  an old push-result.txt does not survive an early exit
+#  11  nor an exit before the execute case (not allowlisted, no stored plan)
 [ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -u
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -74,10 +75,12 @@ scene() { cat > "$T/scene.sh"; }
 
 run_execute() { # -> OUT, RC
   mkdir -p "$SHARED/.devbrain"
-  printf 'Add feature.txt\n' > "$SHARED/.devbrain/plan-latest.md"
-  printf 'add feature\n' > "$SHARED/.devbrain/task-latest.txt"
+  if [ -z "${NO_PLAN:-}" ]; then
+    printf 'Add feature.txt\n' > "$SHARED/.devbrain/plan-latest.md"
+    printf 'add feature\n' > "$SHARED/.devbrain/task-latest.txt"
+  fi
   OUT="$(cd "$T" && env -i HOME="$T/home" PATH="$T/stubs:$SAFEPATH" LANG=en_US.UTF-8 DEVBRAIN_NO_TG=1 \
-      DEVBRAIN_PROJECTS_DIR="$PROJ" DEVBRAIN_ALLOWFILE="$T/allow" DEVBRAIN_CLAUDE_BIN="$T/fake-claude" \
+      DEVBRAIN_PROJECTS_DIR="$PROJ" DEVBRAIN_ALLOWFILE="${ALLOW_OVERRIDE:-$T/allow}" DEVBRAIN_CLAUDE_BIN="$T/fake-claude" \
       DEVBRAIN_GH_BIN="$T/fake-gh" FAKE_SCENE="$T/scene.sh" FAKE_LOG="$F/log" KEY_FOR_TEST="$KEY" ${FAKE_GH_FAIL:+FAKE_GH_FAIL=1} \
       perl -e 'alarm 120; exec @ARGV' "$DIR/bin/devbrain" execute scratch 2>&1)"; RC=$?
   [ ! -e "$T/ABORT" ] || { echo "ABORT: $(cat "$T/ABORT")"; exit 1; }
@@ -225,6 +228,20 @@ run_execute
 [ "$RC" = 7 ] || red 10 "rc=$RC (expected 7, dirty tree): $OUT"
 [ ! -e "$SHARED/.devbrain/push-result.txt" ] || red 10 "the stale push-result.txt survived an early exit: [$(result)]"
 good 10 "a stale push-result.txt is deleted when execute starts"
+
+# ---- 11. ... nor an early exit before the case: not on the allowlist, no stored plan ----------------
+fixture c11
+mkdir -p "$SHARED/.devbrain"; echo "rama: devbrain/stale-0101-0101" > "$SHARED/.devbrain/push-result.txt"
+printf 'someone-else\n' > "$T/allow-other"
+ALLOW_OVERRIDE="$T/allow-other" run_execute
+[ "$RC" = 3 ] || red 11 "not on the allowlist: rc=$RC (expected 3): $OUT"
+[ ! -e "$SHARED/.devbrain/push-result.txt" ] || red 11 "the stale push-result.txt survived the allowlist exit"
+fixture c11b
+mkdir -p "$SHARED/.devbrain"; echo "rama: devbrain/stale-0101-0101" > "$SHARED/.devbrain/push-result.txt"
+NO_PLAN=1 run_execute
+[ "$RC" = 6 ] || red 11 "no stored plan: rc=$RC (expected 6): $OUT"
+[ ! -e "$SHARED/.devbrain/push-result.txt" ] || red 11 "the stale push-result.txt survived the 'no stored plan' exit"
+good 11 "a stale push-result.txt is gone after an allowlist exit and after 'no stored plan'"
 
 [ -n "$FAILS" ] && { echo "RED: cases $(printf '%s\n' $FAILS | sort -nu | tr '\n' ' ')"; exit 1; }
 echo "PASS: devbrain-execute-push"

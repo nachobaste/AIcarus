@@ -20,8 +20,8 @@ Rule: a command segment that names a protected path is blocked unless its verb c
 content. Allowed: `ls stat test [ wc file du touch mkdir chmod rm cd shasum`, `grep` with
 `-c/-q/-l/-L`, `sed -i` (unless its script has a `w` or `e` command or an `s///w` flag),
 `cp` and `mv` INTO the file (moving or copying one OUT is a dump), `git` except
-`show|cat-file|blame|grep|diff|log` and `--no-index` (the global options `-c k=v` and `-C dir`
-are skipped to find the real subcommand), `python` that never prints or dumps, and
+`show|cat-file|blame|grep|diff|log|archive` and `--no-index` (the global options `-c k=v` and `-C dir`
+are skipped to find the real subcommand), `python -c` code that never prints or dumps (a script or `-m module` that names a protected path is blocked), and
 `devbrain-conf-get`. Everything else (cat, head, jq,
 awk, yq, base64, open, node, unknown verbs) is blocked, so a new way to dump fails closed.
 The hook fails CLOSED: if python cannot run, crashes, or the hook input is not a JSON object,
@@ -50,7 +50,8 @@ put `bin/devbrain-conf-get` on your PATH.
 
 Not detected: indirection (`F=~/.openclaw/openclaw.json; cat $F`, globs like
 `~/.open*/open*.json`), symlinks to protected files, relative paths for non-distinctive names,
-a script file or heredoc whose body reads the file, `python -c` code that reads the file with
+a script file or heredoc whose body reads the file, writing a protected file into git's object
+store and reading it back in a second command (`git hash-object -w` then `git cat-file`), `python -c` code that reads the file with
 `open(path).read()` and passes it on without any of the words the hook looks for (`print`,
 `dump`, `write`, `stdout`, `pprint`, `echo`; for example through `os.system` or `subprocess`), secrets already in env vars (`env`,
 `printenv`), and `bash -c` strings (caught only by the path text). Tests:

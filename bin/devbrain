@@ -223,6 +223,11 @@ MODE_LABEL="$MODE of $PROJECT"; trap on_fail EXIT
 if ! [[ "$PROJECT" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "ERROR: invalid project name: $PROJECT"; exit 2
 fi
+# A result left by an earlier run must never outlive it: devbrain-night would read an old
+# `rama:` after ANY early exit (not allowlisted, no stored plan, dirty tree, no commits...)
+# and attach it to this plan. So it goes before every check below. The name was just
+# validated, and only this one scratch file is touched.
+if [ "$MODE" = execute ]; then rm -f "$PROJECTS_DIR/$PROJECT/.devbrain/push-result.txt"; fi
 if ! grep -v '^#' "$ALLOWFILE" 2>/dev/null | grep -qxF "$PROJECT"; then
   echo "ERROR: $PROJECT is not in the devbrain allowlist ($ALLOWFILE). Add it explicitly, on purpose."; exit 3
 fi
@@ -282,9 +287,6 @@ execute)
     echo "ERROR: no stored plan. Run: devbrain plan $PROJECT \"<task>\" first."; exit 6
   fi
   TASK="$(cat .devbrain/task-latest.txt)"
-  # A result left by an earlier run must never outlive it: devbrain-night would read an old
-  # `rama:` after an early exit (dirty tree, no commits, ...) and attach it to this plan.
-  rm -f .devbrain/push-result.txt
   MODE_LABEL="execution of \"$TASK\" ($PROJECT)"; trap on_fail EXIT
   ack "🛠️ Executing on $PROJECT: \"$TASK\". Takes a few minutes — I'll ping the PR link. (If this is NOT what you asked for, reply 'cancel'.)"
   # deterministic scaffolding: clean state, fresh branch off main.

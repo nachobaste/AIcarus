@@ -128,8 +128,12 @@ def verdict(seg):
             else:
                 sub = a
                 break
-        return sub in ("show", "cat-file", "blame", "grep", "diff", "log", "") or "--no-index" in args
+        return sub in ("show", "cat-file", "blame", "grep", "diff", "log", "archive", "") or "--no-index" in args
     if verb.startswith("python"):
+        # Only `python -c <code>` can be judged by what its code says. A script, a module
+        # (`-m json.tool <file>`) or a file argument naming a protected path is a dump.
+        if "-c" not in args:
+            return True
         return bool(re.search(r"print|dump|write|stdout|pprint|echo", seg))
     return True  # cat less more head tail bat awk jq base64 strings open node ... and anything unknown
 
