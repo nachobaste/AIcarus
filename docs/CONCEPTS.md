@@ -66,22 +66,91 @@ epic: 2
 ```
 
 - `status` moves through `requested` (not yet planned) →
-  `approved` → (after a run) either gone/merged, `failed`, or `paused`/`blocked`
-  with a reason.
-- **`aprobado` is the one field with a hard rule attached: every path that
-  writes it is human-present** — `lib/day.sh`'s `day_apply()`, reachable from
-  `bin/devbrain-day` (the daily shift ritual) and `bin/devbrain-queue dale <n>`
-  (a reply to the morning digest), plus `bin/devbrain-interview` (weekly
+  `approved` → (after a run) `done`, `failed`, or `paused`/`blocked` with a reason.
+  `question` (the planner needs an answer) and `superseded` (denied) complete the list.
+- **The queue contract.** A state that does not say why is indistinguishable from a
+  forgotten plan, so `devbrain-preflight` flags a `done` plan with neither `pr:` nor
+  `sin_pr: <reason>`, and a `paused` plan with no `motivo_fallo:`.
+- **`aprobado` is the one field with a hard rule attached: the night runner will not touch
+  a plan without it, and every path that writes it is meant to be run by a person** — `lib/day.sh`'s `day_apply()`, reachable from
+  `bin/devbrain-day` (the daily shift ritual), `bin/devbrain-queue dale <n>`
+  (a reply to the morning digest) and `bin/devbrain-queue approve <n>` (a plan the
+  planner drafted), plus `bin/devbrain-interview` (weekly
   planning), which instructs a model to write it rather than writing it
-  itself. **None of them run unattended.** `bin/devbrain-night` refuses to
+  itself. None of them is scheduled. `bin/devbrain-night` refuses to
   touch any plan that doesn't have both `status: approved` and a non-empty
-  `aprobado:` date. This is the actual mechanism behind "nothing runs
-  unattended unless a human explicitly approved it" — not a convention, a
-  field the nightly runner checks.
+  `aprobado:` date: that field is what the nightly runner checks, and the
+  enforced part ends there. Who can write it is who can run these commands:
+  if you let a bridge agent run `devbrain-queue` (its allowlist grants the whole
+  binary, `approve` and `dale` included), that agent not approving anything on
+  its own rests on its instructions in `openclaw/workspace/AGENTS.md`, not on
+  the allowlist.
 - No database: `git log -- ~/dev/queue/` on that directory is a complete,
   ordered audit trail of every task ever proposed, approved, or rejected, and
-  why (see `bin/devbrain-queue`'s `no <n> "<reason>"` path — rejections require
-  a reason, not just a discard).
+  why (see `bin/devbrain-queue`'s `no <n> "<reason>"` and `deny <n> <reason>` paths —
+  rejections require a reason, not just a discard).
+- `fm_set` (`lib/queue.sh`) treats the value it stores as hostile: every line separator
+  Python's `splitlines()` knows is joined with ` ‖ `, so no value can start a new
+  frontmatter key, and the file is replaced by a rename that never writes through a
+  hard link.
+
+## From a chat message to an approved plan
+
+The messaging bridge's agent is allowed to run exactly one program, `devbrain-queue`
+(`openclaw/exec-approvals.json`, pinned by `tests/test-openclaw-allowlist.sh`). That is a real
+limit — it cannot run `devbrain plan`, `devbrain execute` or anything else — but it grants the
+whole binary, `approve` included; the agent leaving the decision to you is its instructions,
+not the allowlist. A request goes through five steps, and the intended decision point is step 3 or 4:
+
+1. `devbrain-queue add <repo|-> --fuente telegram "<text>"` writes a `requested` plan. The
+   file is created exclusively (`set -C`): an existing plan is never overwritten.
+2. `bin/devbrain-planner` (every 15 minutes, 07:00–22:00, under the night runner's lock)
+   picks it up. A read-only session — `--tools Read,Glob,Grep`, a temporary worktree of
+   `origin/<base>` — returns a plan; the script validates its header, runs
+   `devbrain-preflight --plan` on a copy, and only then writes it. Anything it cannot turn
+   into a plan ends in `status: question` with ONE message, never a retry loop.
+3. `show <n>` prints the plan (cut to fit one chat message); `change <n>: <note>` sends it
+   back to the planner (also the answer to a question); `deny <n> <reason>` closes it.
+4. `approve <n>` runs the preflight again and writes `aprobado:`. It refuses a request the
+   planner has not drafted.
+5. `requeue <n>` is the way out of a `blocked` plan once you granted the missing permission:
+   it archives the block (`bloqueado_antes`, `motivo_antes`, `rama_antes`) and goes back to
+   `requested`; you approve it again.
+
+`queue_filter_text` (`lib/queue_filter.py`) is the filter for text an agent writes into the
+queue: it rejects invisible characters, keys and personal data without ever echoing the text.
+`devbrain-queue add` does not call it yet; call it from whatever door lets an agent add text.
+That filter is a heuristic and treats any run of eight or more digits that is not a date,
+an amount or an IP address as a phone number.
+
+## Nothing secret leaves the machine
+
+Four independent pieces, each closing a failure that happened:
+
+- **`lib/secret_patterns.py`** is the one definition of "looks like a secret". `bin/devbrain`
+  runs its `review` before *every* push of a branch, on every commit of `origin/<base>..HEAD`
+  (a key committed and then deleted still travels in the history), and prints file and kind,
+  never a value. It fails closed. A blocked plan (one that stopped for a missing permission)
+  keeps its work: it is committed and pushed after the same review, with no reviewer and no PR.
+  `bin/devbrain-night` records the branch as `rama:`.
+- **`queue_blocked_command`** reports only the *program* of a command a session could not run,
+  so a password in `PGPASSWORD=... psql` never reaches the frontmatter, a commit message or
+  a chat. The full line stays on disk in `.devbrain/blocked-by.txt`.
+- **`claude/hooks/block-config-secrets-dump.sh`** blocks a session from printing whole config
+  or credential files; `bin/devbrain-conf-get` reads one scalar value instead. See
+  `claude/hooks/README.md` for what it does not catch.
+- **The environment whitelist.** When OpenClaw starts `devbrain` or `devbrain-queue` (it sets
+  `OPENCLAW_CLI` / `OPENCLAW_SHELL=exec`), the script first drops every inherited function and
+  variable but a short list, and the `#!/bin/bash -p` shebang stops `BASH_ENV` and exported
+  functions from running before that. `tests/test-devbrain-env-whitelist.sh` plants canaries in
+  four families of variables.
+
+## The watch
+
+`bin/devbrain-vigia` asks launchd about the jobs `setup.sh` wrote (`com.devbrain.*`): not
+loaded, last exit code other than 0, or loaded but not running. `bin/devbrain-digest` appends
+its output verbatim. A job that exits 0 having done nothing is not covered: the starter kit
+has no ledger of what each job produced to check it against.
 
 ## Verification that can actually run
 
@@ -95,8 +164,8 @@ An unattended session verifies its own work with the commands you declared in
   shell, and refuses a subdir that is absolute, contains `..`, or escapes through a symlink.
 - **`bin/devbrain-preflight`** — run it a few hours before the night. It checks the
   approved plans against the checkout state and, through `devbrain-verify-run --check`,
-  that every granted command is *usable*: subdir present, declared dependencies
-  installed, script defined. It also flags plans that ask for what is never granted
+  that every granted command is *usable*: subdir present (or the repo root, for a plain
+  `npm` command), declared dependencies installed, script defined. It also flags plans that ask for what is never granted
   unattended (`npm install`, cloning a repo).
 - **The day-shift gate** — `day_apply` and the interview run `devbrain-preflight --plan`
   before writing `aprobado:`. A plan that cannot run is refused while you are present.
@@ -231,7 +300,7 @@ different one:
 | `bin/devbrain-repo-audit` | `REPO_AUDIT_ALLOWFILE`, `REPO_AUDIT_EXCLUDEFILE` | `~/dev/devbrain/config/devbrain-projects.{allow,excluded}` |
 | `bin/devbrain-wiki-status-audit` | `WIKI_STATUS_AUDIT_ALLOWFILE` | `~/dev/devbrain/config/devbrain-projects.allow` |
 | `bin/devbrain-stacked-pr-check` | `STACKED_PR_ALLOWFILE`, `STACKED_PR_BASE_OVERRIDE` | `~/dev/devbrain/config/devbrain-projects.allow`, `~/dev/devbrain/config/devbrain-base-branch.override` |
-| `bin/devbrain-drift` | `DRIFT_SNAPSHOT`, `DRIFT_SKILLS`, `NOTION_REDACT_BIN` | `~/dev/devbrain/openclaw/workspace`, `~/dev/devbrain/claude/skills`, `~/dev/devbrain/bin/notion-redact.py` |
+| `bin/devbrain-drift` | `DRIFT_SNAPSHOT`, `DRIFT_SKILLS`, `REDACT_NAMES_BIN` | `~/dev/devbrain/openclaw/workspace`, `~/dev/devbrain/claude/skills`, `~/dev/devbrain/bin/redact-names.py` |
 | `openclaw/exec-approvals.json` | (not env-driven — edit the file) | placeholder paths, must be edited to your actual clone path regardless of what you name it |
 
 If you clone under a different name or path, set the relevant variables (in
