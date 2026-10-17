@@ -2,6 +2,16 @@
 # lib/queue.sh — frontmatter helpers for queue plan files + portable timeout.
 # Frontmatter = the block between the first two '---' lines. Keys are single-line.
 
+# BSD stat (macOS) and GNU stat (Linux) take different flags, and `stat -f` on GNU means
+# "filesystem status", so trying one and falling back to the other is wrong: decide by OS.
+if [ "$(uname -s)" = Darwin ]; then
+  file_mode()  { stat -f %Lp "$1"; }   # <file> -> octal permission bits
+  file_mtime() { stat -f %m "$1"; }    # <file> -> mtime, epoch seconds
+else
+  file_mode()  { stat -c %a "$1"; }
+  file_mtime() { stat -c %Y "$1"; }
+fi
+
 fm_get() { # <file> <key> -> prints value (empty if absent)
   awk -v k="$2" '
     NR==1 && $0=="---" {infm=1; next}
@@ -21,21 +31,52 @@ queue_file_age_days() { # <file> -> integer days since last write (mtime), porta
   # (by hand, by tooling) would silently reset the clock with no way to detect it.
   # Callers must present this as an estimate ("~N days"), never as a confirmed date.
   local f="$1" mtime now
-  mtime="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null)" || return 1
+  mtime="$(file_mtime "$f" 2>/dev/null)" || return 1
   [ -n "$mtime" ] || return 1
   now="$(date +%s)"
   echo $(( (now - mtime) / 86400 ))
 }
 
 fm_set() { # <file> <key> <value> -> replace key, or insert before closing ---
-  local f="$1" k="$2" v="$3" tmp
-  tmp="$(mktemp)"
-  awk -v k="$k" -v v="$v" '
+  # Frontmatter is single-line per key, and the value is attacker-shaped input (it can come
+  # from an agent or from text a person typed into a chat), so it must never be able to start
+  # a new line of the frontmatter. Two holes closed:
+  #  * every line separator Python's str.splitlines() knows (LF, VT, FF, CR, FS, GS, RS,
+  #    U+0085, U+2028, U+2029; CRLF counts as one) is joined with " ‖ ", not just LF. Tools
+  #    that parse a plan with splitlines() would otherwise see a second key. A caller that
+  #    needs to read the pieces back splits on " ‖ " (see devbrain-preflight).
+  #  * the value reaches awk through the environment, so awk does not interpret backslash
+  #    escapes in it (`-v v=...` turns a literal \n into a newline).
+  # The flattening runs under LC_ALL=C on purpose: BSD awk's regex does not match the
+  # multi-byte separators (U+0085/U+2028/U+2029) in a UTF-8 locale. In valid UTF-8 those byte
+  # sequences cannot match inside another character, so the result is the same.
+  # The write goes to a temp file next to the plan and is renamed over it: the mode is kept,
+  # a hard link to a file outside the queue is replaced instead of rewritten, and no temp file
+  # is left behind on failure. Nothing here installs an EXIT handler: the night runner owns
+  # the one that releases its lock.
+  local f="$1" k="$2" v tmp mode
+  v="$(printf '%s' "$3" | LC_ALL=C awk '
+    { sub(/\015$/, ""); gsub(/\013|\014|\015|\034|\035|\036|\302\205|\342\200\250|\342\200\251/, " \342\200\226 ")
+      printf "%s%s", (n++ ? " \342\200\226 " : ""), $0 }')"
+  tmp="$(mktemp "$(dirname "$f")/.fm_set.XXXXXX")" || return 1
+  mode="$(file_mode "$f" 2>/dev/null)"
+  if FM_VALUE="$v" awk -v k="$k" '
     NR==1 && $0=="---" {infm=1; print; next}
-    infm==1 && $0=="---" {if (!done) {print k": "v; done=1}; infm=2; print; next}
-    infm==1 && index($0, k": ")==1 {print k": "v; done=1; next}
+    infm==1 && $0=="---" {if (!done) {print k": "ENVIRON["FM_VALUE"]; done=1}; infm=2; print; next}
+    infm==1 && index($0, k": ")==1 {print k": "ENVIRON["FM_VALUE"]; done=1; next}
     {print}
-  ' "$f" > "$tmp" && mv "$tmp" "$f"
+  ' "$f" > "$tmp" && chmod "${mode:-644}" "$tmp" && mv "$tmp" "$f"; then return 0; fi
+  rm -f "$tmp"; return 1
+}
+
+fm_del() { # <file> <key> -> remove the key from the frontmatter (no-op if absent)
+  local tmp; tmp="$(mktemp)"
+  awk -v k="$2" '
+    NR==1 && $0=="---" {infm=1; print; next}
+    infm==1 && $0=="---" {infm=2; print; next}
+    infm==1 && index($0, k": ")==1 {next}
+    {print}
+  ' "$1" > "$tmp" && mv "$tmp" "$1"
 }
 
 queue_next_nn() { # <queue_dir> -> next NN (max existing +10), shared by devbrain-queue and devbrain-day
@@ -53,16 +94,82 @@ queue_slugify() { # <text> -> lowercase-hyphen slug, same rule devbrain-queue ad
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | cut -c1-40 | sed 's/^-//;s/-$//'
 }
 
-queue_blocked_command() { # <project_dir> -> the exact command a session couldn't run,
-  # or nothing. The ONE reader of .devbrain/blocked-by.txt — bin/devbrain and
-  # bin/devbrain-night both call this, so they can never disagree about what counts
-  # as blocked. An empty file is not a block: a session that touched the file
-  # without naming a real command leaves nothing to act on.
-  local f="$1/.devbrain/blocked-by.txt" content
+queue_blocked_command() { # <project_dir> -> the PROGRAM of each command a session couldn't
+  # run (one per line), or nothing. The ONE reader of .devbrain/blocked-by.txt — bin/devbrain
+  # and bin/devbrain-night both call this, so they can never disagree about what counts as
+  # blocked. An empty file is not a block: a session that touched the file without naming a
+  # real command leaves nothing to act on.
+  #
+  # It returns only the first token after the `VAR=value` prefixes, or [HIDDEN] when what is
+  # left has no program-name shape (a quote, a $(...), an = ...). The full line can carry a
+  # password (`PGPASSWORD=... psql ...`) and nothing detects that shape, and this value goes to
+  # the frontmatter, the queue's commit message, Telegram and the night report. The full
+  # command stays on this machine's disk, in .devbrain/blocked-by.txt, until the next run of
+  # that repo.
+  local f="$1/.devbrain/blocked-by.txt" line out="" prog
+  local dq='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="([^"\\]|\\.)*"([[:space:]]+|$)'
+  local sq="^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*='[^']*'([[:space:]]+|\$)"
+  local plain='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^[:space:]"'"'"'\\]*([[:space:]]+|$)'
   [ -f "$f" ] || return 0
-  content="$(cat "$f" 2>/dev/null)"
-  [ -n "$(printf '%s' "$content" | tr -d '[:space:]')" ] && printf '%s' "$content"
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$(printf '%s' "$line" | tr -d '[:space:]')" ] || continue
+    while [[ "$line" =~ $dq ]] || [[ "$line" =~ $sq ]] || [[ "$line" =~ $plain ]]; do
+      line="${line:${#BASH_REMATCH[0]}}"
+    done
+    prog="${line#"${line%%[![:space:]]*}"}"; prog="${prog%%[[:space:]]*}"
+    [[ "$prog" =~ ^[A-Za-z0-9_./+@-]+$ ]] || prog="[HIDDEN]"
+    out="${out:+$out$'\n'}$prog"
+  done < "$f"
+  printf '%s' "$out"
   return 0
+}
+
+# ABSOLUTE path of lib/queue_filter.py, resolved when this file is LOADED and not when a
+# function runs: a later `cd` by the caller neither changes it nor lets a queue_filter.py in
+# another directory take its place. Empty when it cannot be resolved (zsh, where BASH_SOURCE
+# is empty): the filter then fails closed (rc 6).
+QUEUE_FILTER_PY=""
+[ -n "${BASH_SOURCE[0]:-}" ] && { QUEUE_FILTER_PY="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/queue_filter.py" || QUEUE_FILTER_PY=""; }
+
+queue_filter_text() { # stdin: the text bytes -> stdout: ONE line (rc 0), or only the reason (rc 4)
+  # The text an agent writes is hostile input: before it reaches a plan it goes through
+  # lib/queue_filter.py. Reasons for rc 4: format, length, key, personal data; a rejection
+  # never returns the text or a fragment of it. rc 6 = the filter could not run (missing
+  # interpreter or file, or it crashed): it fails closed, with an error that is not a reason.
+  # The interpreter is always `python3 -I` found on a fixed PATH, because the Unicode category
+  # of a new emoji depends on the Python's Unicode version.
+  local py f="$QUEUE_FILTER_PY" rc=0
+  py="$(PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" command -v python3)"
+  [ -n "$py" ] && [ -x "$py" ] && [ -f "$f" ] || { echo "error: the text filter cannot run (python3 or $f is missing)" >&2; return 6; }
+  "$py" -I "$f" || rc=$?
+  case "$rc" in 0|4) return "$rc" ;; *) return 6 ;; esac
+}
+
+queue_sync_from_origin() { # <queue_dir> -> merge origin/<branch> into the queue's checkout; 1 on conflict
+  # The queue is edited from several machines and sessions that push to origin; a runner that
+  # never updates its checkout reads stale plans and its push collides. Merge, never rebase (a
+  # rebase forces a force-push). On a conflict it aborts, leaves the tree as it was and returns
+  # 1 so the caller decides.
+  local qdir="$1" root branch out
+  root="$(cd "$qdir" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  branch="$(git -C "$root" symbolic-ref --short -q HEAD 2>/dev/null)" || branch=""
+  [ -z "$branch" ] && return 0
+  git -C "$root" fetch -q origin 2>/dev/null || { echo "queue_sync_from_origin: WARN fetch failed in $root" >&2; return 0; }
+  git -C "$root" rev-parse --verify -q "origin/$branch" >/dev/null || return 0
+  if ! out="$(git -C "$root" merge -q --no-edit "origin/$branch" 2>&1)"; then
+    git -C "$root" merge --abort 2>/dev/null
+    echo "queue_sync_from_origin: ERROR conflict merging origin/$branch in $root; tree left untouched: $out" >&2
+    return 1
+  fi
+  return 0
+}
+
+queue_plan_body() { # <plan file> -> the plan without its frontmatter
+  awk 'NR==1 && $0=="---" {infm=1; next} infm==1 && $0=="---" {infm=2; next} infm==2 {print}' "$1"
+}
+
+recorta() { # <n> [suffix] — stdin cut to n CHARACTERS (not bytes), with the suffix if it was cut
+  python3 -c 'import sys;n=int(sys.argv[1]);s=sys.stdin.read().strip();print(s if len(s)<=n else s[:n].rstrip()+sys.argv[2])' "$1" "${2:-…}"
 }
 
 queue_commit_and_push() { # <queue_dir> <message> -> commit+push queue_dir if it's in a git repo; NEVER fails the caller

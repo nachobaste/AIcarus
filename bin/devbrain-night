@@ -71,6 +71,15 @@ plan_body() { # strip frontmatter
   awk 'NR==1 && $0=="---" {infm=1; next} infm==1 && $0=="---" {infm=2; next} infm==2 {print}' "$1"
 }
 
+record_branch() { # <plan> <project dir> -> `rama: <branch>` if bin/devbrain pushed the branch of this run
+  # bin/devbrain writes .devbrain/push-result.txt itself, after the session ends and after
+  # deleting whatever the session left there, so nothing a session prints can set `rama:`.
+  local f="$2/.devbrain/push-result.txt" line
+  [ -f "$f" ] || return 0
+  line="$(head -1 "$f")"
+  case "$line" in "rama: devbrain/"*) fm_set "$1" rama "${line#rama: }" ;; esac
+}
+
 DONE=0; FAILED=0; BLOCKED=0; SUMMARY=""
 { echo "# Night report — $(date '+%Y-%m-%d %H:%M')"; echo ""; } > "$REPORT"
 log "night start"
@@ -121,13 +130,17 @@ while in_window && PLAN=$(next_plan); do
   if [ -n "$BLOCKED_CMD" ]; then
     fm_set "$PLAN" status blocked
     fm_set "$PLAN" bloqueado_por "$BLOCKED_CMD"
+    record_branch "$PLAN" "$DIR"
     BLOCKED=$((BLOCKED+1)); SUMMARY="$SUMMARY\n🚧 $BASE — missing: $BLOCKED_CMD"
     { echo "- 🚧 $BASE — blocked, missing: \`$BLOCKED_CMD\`"; } >> "$REPORT"
     queue_commit_and_push "$QUEUE_DIR" "queue: blocked $BASE ($BLOCKED_CMD)"
-    tg_send "🚧 Task blocked: $BASE needs \`$BLOCKED_CMD\`. Add it to devbrain-verify.commands and re-approve the plan to retry — it does not retry on its own."
+    tg_send "🚧 Task blocked: $BASE needs \`$BLOCKED_CMD\`. Add it to devbrain-verify.commands, run \`devbrain-queue requeue <n>\` and then \`approve <n>\` to retry — it does not retry on its own."
   elif [ $RC -eq 0 ]; then
     PR=$(echo "$OUT" | sed -n 's/^PR ready for review: //p' | tail -1)
-    fm_set "$PLAN" status done; [ -n "$PR" ] && fm_set "$PLAN" pr "$PR"
+    # Queue contract: `done` carries `pr:` or `sin_pr:`, written BEFORE the status.
+    if [ -n "$PR" ]; then fm_set "$PLAN" pr "$PR"
+    else fm_set "$PLAN" sin_pr "devbrain execute exited 0 without printing the PR URL; check by hand"; fi
+    fm_set "$PLAN" status done
     DONE=$((DONE+1)); SUMMARY="$SUMMARY\n✅ $BASE → ${PR:-PR}"
     { echo "- ✅ $BASE → ${PR:-(no URL)}"; } >> "$REPORT"
     queue_commit_and_push "$QUEUE_DIR" "queue: done $BASE${PR:+ -> $PR}"
@@ -141,7 +154,11 @@ while in_window && PLAN=$(next_plan); do
     sleep "${DEVBRAIN_QUOTA_PAUSE:-5400}"
   else
     fm_set "$PLAN" status failed
-    fm_set "$PLAN" motivo_fallo "exit $RC: $(echo "$OUT" | tail -1 | cut -c1-160)"
+    # The last ERROR/fatal line (the cause) plus the tail, not just the last 160 characters:
+    # "exit 1: remote:" said nothing. Capped at 600 so the frontmatter cannot grow unbounded.
+    CAUSE="$(echo "$OUT" | grep -E 'ERROR|fatal' | tail -1 | cut -c1-300)" || true
+    fm_set "$PLAN" motivo_fallo "$(echo "exit $RC: ${CAUSE:+$CAUSE | }$(echo "$OUT" | tail -3 | tr '\n' ' ')" | cut -c1-600)"
+    record_branch "$PLAN" "$DIR"
     FAILED=$((FAILED+1)); SUMMARY="$SUMMARY\n❌ $BASE"
     { echo "- ❌ $BASE — exit $RC"; } >> "$REPORT"
     queue_commit_and_push "$QUEUE_DIR" "queue: fail $BASE (exit $RC)"

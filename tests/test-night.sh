@@ -1,5 +1,6 @@
 #!/bin/bash
 # tests/test-night.sh — runner dry-run with a stubbed devbrain
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 export DEVBRAIN_NO_TG=1
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -82,8 +83,8 @@ bash "$DIR/bin/devbrain-night" >/dev/null 2>&1
 
 [ "$(fm_get "$DEVBRAIN_QUEUE_DIR/80-bloqueado--b.plan.md" status)" = "blocked" ] \
   && echo "OK: a missing permission -> status blocked, not failed" || exit 1
-[ "$(fm_get "$DEVBRAIN_QUEUE_DIR/80-bloqueado--b.plan.md" bloqueado_por)" = "deno lint" ] \
-  && echo "OK: bloqueado_por records the exact missing command" || exit 1
+[ "$(fm_get "$DEVBRAIN_QUEUE_DIR/80-bloqueado--b.plan.md" bloqueado_por)" = "deno" ] \
+  && echo "OK: bloqueado_por records the program of the missing command" || exit 1
 grep -q "bloqueado" "$DEVBRAIN_QUEUE_DIR/night-report-latest.md" \
   && echo "OK: the night report mentions the blocked task" || exit 1
 
@@ -98,4 +99,39 @@ grep -q '^bloqueado$' "$TMP/stub-calls.log" \
 [ "$(fm_get "$DEVBRAIN_QUEUE_DIR/80-bloqueado--b.plan.md" status)" = "blocked" ] \
   && echo "OK: a blocked plan is never re-executed on a later night, status stays blocked" || exit 1
 
+echo "ALL OK"
+
+# ---- queue contract: `done` carries pr: or sin_pr: -----------------------------------
+# A run that exits 0 without printing a PR URL must not be `done` with nothing to show for it.
+cat > "$TMP/devbrain-stub" <<'EOF'
+#!/bin/bash
+[ "$1" = "execute" ] || exit 9
+echo "$2" >> "$STUB_STATE/stub-calls.log"
+case "$2" in
+  nopr)   echo "all done, no URL"; exit 0 ;;
+  cause)  echo "fetching"; echo "ERROR: push stopped by the review: conf.txt (pattern x)"; echo "tail line"; exit 11 ;;
+  pushed) mkdir -p "$PROJECTS_DIR_FOR_STUB/pushed/.devbrain"
+          echo "rama: devbrain/work-0301-0915" > "$PROJECTS_DIR_FOR_STUB/pushed/.devbrain/push-result.txt"
+          echo "ERROR: gh pr create failed"; exit 10 ;;
+  forged) mkdir -p "$PROJECTS_DIR_FOR_STUB/forged/.devbrain"
+          echo "rama: somewhere-else" > "$PROJECTS_DIR_FOR_STUB/forged/.devbrain/push-result.txt"
+          echo "ERROR: boom"; exit 10 ;;
+esac
+EOF
+mkplan "100-nopr--n.plan.md" nopr approved 1; mkdir -p "$TMP/projects/nopr"
+mkplan "110-cause--c.plan.md" cause approved 1; mkdir -p "$TMP/projects/cause"
+mkplan "120-pushed--p.plan.md" pushed approved 1; mkdir -p "$TMP/projects/pushed"
+mkplan "130-forged--f.plan.md" forged approved 1; mkdir -p "$TMP/projects/forged"
+bash "$DIR/bin/devbrain-night" >/dev/null 2>&1
+P="$DEVBRAIN_QUEUE_DIR/100-nopr--n.plan.md"
+[ "$(fm_get "$P" status)" = done ] && [ -z "$(fm_get "$P" pr)" ] && [ -n "$(fm_get "$P" sin_pr)" ] \
+  && echo "OK: done without a PR URL records sin_pr:" || { echo "FAIL: done without a URL: status=$(fm_get "$P" status) sin_pr=$(fm_get "$P" sin_pr)"; exit 1; }
+P="$DEVBRAIN_QUEUE_DIR/110-cause--c.plan.md"
+[ "$(fm_get "$P" status)" = failed ] && fm_get "$P" motivo_fallo | grep -q "ERROR: push stopped by the review" \
+  && echo "OK: motivo_fallo carries the ERROR line, not just the tail" || { echo "FAIL: motivo_fallo=$(fm_get "$P" motivo_fallo)"; exit 1; }
+P="$DEVBRAIN_QUEUE_DIR/120-pushed--p.plan.md"
+[ "$(fm_get "$P" rama)" = "devbrain/work-0301-0915" ] \
+  && echo "OK: a branch pushed by bin/devbrain is recorded as rama:" || { echo "FAIL: rama=$(fm_get "$P" rama)"; exit 1; }
+P="$DEVBRAIN_QUEUE_DIR/130-forged--f.plan.md"
+[ -z "$(fm_get "$P" rama)" ] && echo "OK: a push-result that is not a devbrain/ branch is ignored" || { echo "FAIL: forged rama accepted: $(fm_get "$P" rama)"; exit 1; }
 echo "ALL OK"

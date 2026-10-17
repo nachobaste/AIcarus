@@ -56,7 +56,7 @@ Five moving parts:
    "add a dark mode toggle to the settings page" into a queued work item, answers
    quick questions, nags you about a stale proposal. It should be cheap — it's
    running constantly and doing very little real reasoning, but it must support
-   tool calling, because it routes requests by calling `devbrain` through the
+   tool calling, because it routes requests by calling `devbrain-queue` through the
    bridge. The reference setup uses Moonshot's Kimi K2 over its API, with a local
    [Ollama](https://ollama.com) model as a self-hosted option. The model is chosen
    in the bridge, not in this repo: with OpenClaw, run
@@ -68,7 +68,9 @@ Five moving parts:
    *is* the audit trail. See `lib/queue.sh` for the frontmatter conventions and
    `bin/devbrain-queue` for the CLI that manages it.
 
-4. **A stronger coding agent.** Picks up *approved* queue items (never anything
+4. **A stronger coding agent.** A request you queue from chat is first turned into a
+   plan by `bin/devbrain-planner` (a read-only session; you get the plan to approve,
+   change or deny). The agent then picks up *approved* queue items (never anything
    else) and does the actual work: reads the repo, writes code, runs your tests,
    opens a PR. The reference setup uses [Claude Code](https://claude.com/claude-code)
    for this, in two passes — one model to draft a plan (`devbrain plan`), a second
@@ -93,32 +95,41 @@ This is the one piece of the design that isn't a suggestion:
    `devbrain/<slug>-<timestamp>`.
 3. **A PR, not a merge.** The agent opens a pull request with a plain-language
    summary (what changed, why, risks, how to verify) and a second agent's
-   adversarial review at the top of the PR body. It never merges it.
+   adversarial review at the top of the PR body. It never merges it. Before any
+   branch leaves the machine, `lib/secret_patterns.py` reads every commit of it
+   and stops the push if something looks like a key.
 4. **You merge, or you don't.** From the GitHub app, from the CLI, whenever you
    get to it. If something's wrong, you close the PR and tell the queue why.
 
-Three paths can write the `aprobado:` (approved) key into a queue plan —
+Four paths can write the `aprobado:` (approved) key into a queue plan —
 `bin/devbrain-interview` (weekly planning), `bin/devbrain-day` (the daily
-shift ritual), and `bin/devbrain-queue dale <n>` (a reply to the morning
-digest, for example, from a chat bot). All three require a human to make the call
-on that specific plan in the moment; none of them run unattended. The
-actual gate against unattended self-approval lives in `bin/devbrain-night`:
-its `next_plan()` refuses any plan that lacks both `status: approved` and
-a non-empty `aprobado:` — so nothing reaches the nightly runner without
-both markers set by a human.
+shift ritual), `bin/devbrain-queue dale <n>` (a reply to the morning
+digest, for example, from a chat bot) and `bin/devbrain-queue approve <n>` (a plan
+the planner drafted). `bin/devbrain-queue requeue <n>` puts a blocked plan back to
+`requested`, to be approved again. The four are meant to be run by a person making the call on that
+specific plan in the moment; none of them is scheduled. What the system
+itself enforces is narrower: `bin/devbrain-night`'s `next_plan()` refuses any plan
+that lacks both `status: approved` and a non-empty `aprobado:`. Who writes that
+key is a matter of who can run these commands. The bridge agent's allowlist
+grants the whole `devbrain-queue` binary, `approve` and `dale` included, so the
+agent not approving anything on its own rests on its instructions
+(`openclaw/workspace/AGENTS.md`), not on the allowlist.
 
 ## What's in this repo
 
 ```
-bin/            the actual commands (devbrain, devbrain-queue, devbrain-night, ...)
+bin/            the actual commands (devbrain, devbrain-queue, devbrain-planner,
+                devbrain-night, devbrain-vigia, ...)
                 (devbrain-verify-run runs @subdir verification commands; devbrain-preflight
                 checks that approved plans can actually run — see docs/CONCEPTS.md)
 lib/            shared shell/python helpers sourced by bin/*
-claude/         Claude Code skills and status line used by the coding-agent side
+claude/         Claude Code skills, status line and hooks (claude/hooks/ blocks dumping
+                config files that hold API keys) used by the coding-agent side
 openclaw/       persona/config templates for the OpenClaw messaging bridge, plus
-                exec-approvals.json — the actual allowlist config that makes "the
-                agent can only run devbrain" a real enforced boundary, not just
-                a line in a prompt
+                exec-approvals.json — the allowlist config that limits what the
+                bridge agent can execute to the one `devbrain-queue` binary (so it can
+                no longer run `devbrain plan` or `devbrain execute`); what it does
+                with that binary is up to its instructions
 tests/          bash test suite (tests/*.sh — run any of them directly)
 docs/wiki-example/  a small, generic sample of the wiki convention (not a live wiki)
 config/         the files the scripts read (DEVBRAIN_CONFIG_DIR moves them):
@@ -197,9 +208,8 @@ personal-data territory:
   real personal data and are exactly the kind of thing you should *not* copy
   from someone else's config — build your own, and keep it read-only, "read
   live, answer, forget," never persisted to disk or the wiki.
-- **Notion sync.** The reference system mirrors its queue and wiki into a
-  Notion workspace. That mirror was built around one person's wiki layout, so
-  it doesn't ship here. A Notion mirror is a reasonable add-on if you want one.
+- **Notion sync.** The reference system used to mirror its queue and wiki into a
+  Notion workspace; it retired that mirror, and it never shipped here.
 
 ## A note on the "house rules" file
 

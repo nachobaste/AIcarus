@@ -10,7 +10,9 @@
 #            options with pros/cons. A second option that touches the same files as the
 #            first is filler dressed as a choice, and it is the easiest thing for a model
 #            to produce when asked for "two options".
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
+export DEVBRAIN_VIGIA_BIN=/nonexistent   # the watch reads launchd: never from these tests
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/lib/research_promote.py"
 TMP="$(mktemp -d)"

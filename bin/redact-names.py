@@ -54,7 +54,7 @@ def main():
     # is the only mode.
     patterns = load_patterns(NAMES_FILE)
     if not patterns:
-        print(f"notion-redact: {NAMES_FILE} is missing or has no patterns — "
+        print(f"redact-names: {NAMES_FILE} is missing or has no patterns — "
               "refusing to emit unredacted content", file=sys.stderr)
         return 2
     sys.stdout.write(build_regex(patterns).sub(PLACEHOLDER, sys.stdin.read()))

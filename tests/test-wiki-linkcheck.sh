@@ -7,6 +7,7 @@
 # the first real run of this tool reported 9 problems of which 5 were correct
 # text — documented examples living inside inline code spans. Fixing those
 # would have corrupted the line in SCHEMA.md that defines the link convention.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/wiki-linkcheck"

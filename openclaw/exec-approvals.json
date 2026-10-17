@@ -14,9 +14,6 @@
       "autoAllowSkills": false,
       "allowlist": [
         {
-          "pattern": "/ABSOLUTE/PATH/TO/YOUR/CLONE/OF/THIS/REPO/bin/devbrain"
-        },
-        {
           "pattern": "/ABSOLUTE/PATH/TO/YOUR/CLONE/OF/THIS/REPO/bin/devbrain-queue"
         }
       ]

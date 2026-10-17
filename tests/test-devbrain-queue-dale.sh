@@ -14,6 +14,7 @@
 # owner's single chat ID) — verified by reading that config, not re-implemented
 # here: `exec` hands devbrain-queue nothing but the command string, so there is
 # no sender identity left to re-check at this layer.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-queue"

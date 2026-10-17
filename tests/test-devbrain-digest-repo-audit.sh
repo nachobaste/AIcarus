@@ -7,7 +7,9 @@
 # during testing). The one property that matters: repo names must survive the
 # AI summarizer verbatim, the same reason Proposals/Blocked bypass it —
 # a paraphrased or dropped repo name defeats the entire point of this check.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
+export DEVBRAIN_VIGIA_BIN=/nonexistent   # the watch reads launchd: never from these tests
 export DEVBRAIN_NO_TG=1
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-digest"

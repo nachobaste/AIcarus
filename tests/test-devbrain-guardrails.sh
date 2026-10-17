@@ -1,5 +1,6 @@
 #!/bin/bash
 # tests/test-devbrain-guardrails.sh — static + behavioral checks on bin/devbrain
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 export DEVBRAIN_NO_TG=1
 DIR="$(cd "$(dirname "$0")/.." && pwd)"

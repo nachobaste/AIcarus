@@ -11,6 +11,7 @@
 # The model is stubbed with a fake `claude` that records its arguments, so the
 # whole pipeline is exercised without tokens and without depending on what a
 # model happens to say today.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-research"

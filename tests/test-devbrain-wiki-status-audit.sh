@@ -6,6 +6,7 @@
 # table-masking cases modeled on real stale-status pages that motivated this
 # script (a status page with a corrected "PR merged" line and a "how it used
 # to be" table).
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-wiki-status-audit"

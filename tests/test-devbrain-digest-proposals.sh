@@ -11,7 +11,9 @@
 # summarizer below OBVIOUSLY reworks anything it receives (it counts lines instead
 # of echoing them), so if the numbering ever got fed through it, the corruption
 # would be visible in the sent message.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
+export DEVBRAIN_VIGIA_BIN=/nonexistent   # the watch reads launchd: never from these tests
 export DEVBRAIN_NO_TG=1
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-digest"

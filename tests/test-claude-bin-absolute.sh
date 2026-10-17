@@ -8,6 +8,7 @@
 #
 # A check that was only ever seen passing cannot be told apart from one that looks at
 # nothing: the planted cases below must be caught by the same scanner.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }

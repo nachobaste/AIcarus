@@ -45,9 +45,21 @@ done
 PRS=$("$GH_BIN" search prs --author "@me" --state open --json repository,title,url 2>/dev/null \
   --jq '.[] | "  - \(.title) → \(.url)"' 2>/dev/null | head -20)
 
-# Night report (written by devbrain-night)
+# Night report (written by devbrain-night). devbrain-night only rewrites it when it runs; with
+# the night off the file stays frozen and would repeat the last block forever. It is ignored
+# when its header ("# Night report — YYYY-MM-DD HH:MM") is older than 36 h or cannot be read.
 NIGHT=""
-[ -f "$QUEUE_DIR/night-report-latest.md" ] && NIGHT=$(cat "$QUEUE_DIR/night-report-latest.md")
+if [ -f "$QUEUE_DIR/night-report-latest.md" ]; then
+  _rep_age=$(python3 -I -c '
+import datetime, sys
+try:
+    t = datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d %H:%M")
+    print(int((datetime.datetime.now() - t).total_seconds()))
+except ValueError:
+    pass
+' "$(sed -n '1s/^# Night report — //p' "$QUEUE_DIR/night-report-latest.md")" 2>/dev/null)
+  case "$_rep_age" in ''|*[!0-9-]*) ;; *) [ "$_rep_age" -le 129600 ] && NIGHT=$(cat "$QUEUE_DIR/night-report-latest.md") ;; esac
+fi
 # Status board (shared knowledge across repos)
 BOARD=""
 for b in "$WIKI_DIR/status/"*.md; do
@@ -137,10 +149,23 @@ for f in "$QUEUE_DIR"/*.plan.md; do
 "
 done
 
+# The watch: scheduled jobs that are not loaded, failing or stalled (bin/devbrain-vigia).
+# Textual, never through the AI summarizer. It prints nothing on a machine without launchd (no
+# section then); "no findings" is one line, and if the script itself fails the digest says so.
+VIGIA_BIN="${DEVBRAIN_VIGIA_BIN:-$(dirname "$0")/devbrain-vigia}"
+VIGIA=""
+if [ -x "$VIGIA_BIN" ]; then
+  VIGIA="$("$VIGIA_BIN" 2>>"$LOG")" || VIGIA="  ⚠️ could not run the watch (see $LOG)"
+fi
+# Findings (or a failure to look) must not sit under an "All quiet."
+VIGIA_FINDINGS=0
+[ -n "$VIGIA" ] && ! printf '%s' "$VIGIA" | grep -q 'no findings' && VIGIA_FINDINGS=1
+
 if [ -z "$ACTIVITY" ] && [ -z "$PRS" ] && [ -z "$NIGHT" ] && [ -z "$AUDIT" ] && [ -z "$PROPOSALS" ] && [ -z "$BLOCKED" ] && [ -z "$UNCLASSIFIED" ]; then
-  MSG="☀️ Good morning. No code changes in the last 24h. All quiet."
+  MSG="☀️ Good morning. No code changes in the last 24h."
+  [ "$VIGIA_FINDINGS" -eq 0 ] && MSG="$MSG All quiet."
 else
-  CONTEXT="Night report:\n${NIGHT:-(did not run)}\n\nGit activity last 24h:${ACTIVITY:-\n(none)}\n\nOpen PRs waiting on your review:\n${PRS:-  (none)}\n\nStatus board:\n${BOARD:-(empty)}\n\nWiki changes (24h):\n${WIKIDIFF:-(none)}\n\nMessaging-bridge agent actions in 24h (metadata):\n${AUDIT:-(none)}"
+  CONTEXT="Night report:\n${NIGHT:-(no recent night report: the night did not run)}\n\nGit activity last 24h:${ACTIVITY:-\n(none)}\n\nOpen PRs waiting on your review:\n${PRS:-  (none)}\n\nStatus board:\n${BOARD:-(empty)}\n\nWiki changes (24h):\n${WIKIDIFF:-(none)}\n\nMessaging-bridge agent actions in 24h (metadata):\n${AUDIT:-(none)}"
   # No --model by default (Claude Code's own). A rejected model config skips the call
   # and falls into the "generator failed" line below; the reason goes to the log.
   MSG=""
@@ -182,6 +207,13 @@ if [ -n "$UNCLASSIFIED" ]; then
 
 🔍 Unclassified repos (add them to .allow or .excluded):
 $UNCLASSIFIED"
+fi
+
+if [ -n "$VIGIA" ]; then
+  MSG="$MSG
+
+🔭 Watch (scheduled jobs):
+$VIGIA"
 fi
 
 # Telegram is not in the critical path for ALERTS elsewhere (bin/devbrain-night),

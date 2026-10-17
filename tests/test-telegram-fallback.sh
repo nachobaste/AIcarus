@@ -15,7 +15,9 @@
 # 2026-08-08 near miss in tests/test-devbrain-digest-proposals.sh for why: this machine's
 # `export PATH=...` habit silently defeats PATH-prepend stubbing and sent a live digest
 # during testing that same day.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
+export DEVBRAIN_VIGIA_BIN=/nonexistent   # the watch reads launchd: never from these tests
 export DEVBRAIN_NO_TG=1   # the repo-wide default; overridden explicitly below where needed
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

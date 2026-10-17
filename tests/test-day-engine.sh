@@ -3,6 +3,7 @@
 # Telegram approval. Both interfaces resolve "which proposal" to a TITLE before
 # calling this engine — never a list position — so a backlog that changes mid-session can
 # never make "dale 2" hit the wrong proposal. This suite is what proves that contract.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/lib/day_engine.py"

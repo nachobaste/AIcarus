@@ -4,6 +4,7 @@
 # The trap: after `cd frontend && ...` the session's shell stays in frontend/, and the
 # next `cd frontend && ...` fails. The script does the cd itself, so two calls in a row
 # from ANY directory must work.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 VR="$(cd "$(dirname "$0")/.." && pwd)/bin/devbrain-verify-run"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
@@ -87,5 +88,21 @@ check_red "the script is not in package.json" "does not define the script"
 printf 'demo=npm run probe@fantasma\n' > "$T/mc/devbrain-verify.commands"
 check_red "the subdir does not exist" "does not exist"
 echo "OK: --check fires on missing node_modules, missing dependency, missing script, missing subdir"
+
+# ---- --check on commands WITHOUT @subdir ---------------------------------------------
+# It used to look only at `cmd@subdir`: a repo with a plain `npm run build` was never checked.
+mkdir -p "$T/projects/plain"; git -C "$T/projects/plain" init -q
+printf '{"scripts":{"build":"true"}}\n' > "$T/projects/plain/package.json"
+printf 'plain=npm run build,npm test\n' > "$T/mc/devbrain-verify.commands"
+"$VR" --check plain >"$T/out" 2>&1 && fail "--check was green with no node_modules in a plain repo"
+grep -q "node_modules missing" "$T/out" || fail "it did not explain that node_modules is missing: $(cat "$T/out")"
+mkdir "$T/projects/plain/node_modules"
+"$VR" --check plain >"$T/out" 2>&1 && fail "--check was green with the npm test script undefined"
+grep -q "does not define the script \`test\`" "$T/out" || fail "it did not say the test script is missing: $(cat "$T/out")"
+printf '{"scripts":{"build":"true","test":"true"}}\n' > "$T/projects/plain/package.json"
+"$VR" --check plain >/dev/null 2>&1 || fail "--check failed on a healthy plain repo"
+# and the wrapper still only RUNS what is declared with @subdir
+"$VR" plain npm test >"$T/out" 2>&1 && fail "the wrapper ran a plain (no @subdir) command"
+echo "OK: --check also reviews commands without @subdir (3 cases); the wrapper still refuses to run them"
 
 echo "PASS: devbrain-verify-run"

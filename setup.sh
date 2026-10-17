@@ -314,6 +314,9 @@ PLIST
   <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>'
   write_plist "heartbeat" "devbrain-heartbeat" '  <key>StartInterval</key>
   <integer>300</integer>'
+  # Every 15 minutes; devbrain-planner itself only works between 07:00 and 22:00.
+  write_plist "planner" "devbrain-planner" '  <key>StartInterval</key>
+  <integer>900</integer>'
   LAUNCHD_GENERATED=1
 else
   echo "  [skip] not macOS — launchd doesn't apply; use cron/systemd (see README.md)"
@@ -346,6 +349,7 @@ if [ "$LAUNCHD_GENERATED" -eq 1 ]; then
   echo "        launchctl load ~/Library/LaunchAgents/com.devbrain.night.plist"
   echo "        launchctl load ~/Library/LaunchAgents/com.devbrain.digest.plist"
   echo "        launchctl load ~/Library/LaunchAgents/com.devbrain.heartbeat.plist"
+  echo "        launchctl load ~/Library/LaunchAgents/com.devbrain.planner.plist"
 fi
 echo "  [ ] review config/: devbrain-projects.allow, devbrain-projects.excluded,"
 echo "      devbrain-base-branch.override, devbrain-verify.commands, and"

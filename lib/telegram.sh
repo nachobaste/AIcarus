@@ -20,9 +20,9 @@ tg_send() {
   [ -t 1 ] && return 0
   [ -z "$TG_ID" ] && return 0
   local tok
-  tok=$(python3 -c "import json;print(json.load(open('$HOME/.openclaw/openclaw.json')).get('channels',{}).get('telegram',{}).get('botToken',''))" 2>/dev/null)
+  tok=$(python3 -I -c "import json;print(json.load(open('$HOME/.openclaw/openclaw.json')).get('channels',{}).get('telegram',{}).get('botToken',''))" 2>/dev/null)
   [ -z "$tok" ] && return 0
-  curl -s -m 10 "https://api.telegram.org/bot${tok}/sendMessage" \
+  "$TELEGRAM_CURL_BIN" -s -m 10 "https://api.telegram.org/bot${tok}/sendMessage" \
     --data-urlencode "chat_id=${TG_ID}" --data-urlencode "text=$1" >/dev/null 2>&1 || true
 }
 
@@ -37,7 +37,7 @@ tg_send_checked() {
     return 1
   fi
   local tok resp
-  tok=$(python3 -c "import json;print(json.load(open('$HOME/.openclaw/openclaw.json')).get('channels',{}).get('telegram',{}).get('botToken',''))" 2>/dev/null)
+  tok=$(python3 -I -c "import json;print(json.load(open('$HOME/.openclaw/openclaw.json')).get('channels',{}).get('telegram',{}).get('botToken',''))" 2>/dev/null)
   if [ -z "$tok" ]; then
     echo "tg_send_checked: no bot token in openclaw.json" >&2
     return 1

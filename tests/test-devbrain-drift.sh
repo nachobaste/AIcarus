@@ -6,6 +6,7 @@
 # a command that always prints nothing would pass a naively written test file.
 # So every detection assertion below is paired with a silence assertion, and a
 # fully clean set of stores must come back exit 0.
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$DIR/bin/devbrain-drift"
@@ -48,7 +49,7 @@ printf 'Fakesurname Uno\n' > "$TMP/redact-names.txt"
 
 run() { DRIFT_SNAPSHOT="$TMP/snap" DRIFT_LIVE="$TMP/live" \
         DRIFT_WIKI="$TMP/wiki" DRIFT_MEMORY="$TMP/mem" DRIFT_SKILLS="$TMP/skills" \
-        NOTION_REDACT_BIN="$DIR/bin/notion-redact.py" \
+        REDACT_NAMES_BIN="$DIR/bin/redact-names.py" \
         CLASSIFY_NAMES_FILE="$TMP/redact-names.txt" \
         "$BIN" "$@"; }
 
@@ -142,7 +143,7 @@ run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "secret plant did not clean up, got $RC ($(cat "$OUT"))"
 echo "OK: skill-content detects a secret-shaped string without ever printing it"
 
-# (c) no person names — reuses bin/notion-redact.py, not a second list
+# (c) no person names — reuses bin/redact-names.py, not a second list
 mkdir -p "$TMP/skills/bad-name"
 printf -- '---\nname: bad-name\ndescription: d\n---\n\nFirma Fakesurname Uno hoy.\n' > "$TMP/skills/bad-name/SKILL.md"
 run > "$OUT" 2>&1
@@ -150,14 +151,14 @@ grep -q $'possible-name\tbad-name/SKILL.md' "$OUT" || fail "did not detect a red
 rm -rf "$TMP/skills/bad-name"
 run > "$OUT" 2>&1; RC=$?
 [ "$RC" -eq 0 ] || fail "name plant did not clean up, got $RC ($(cat "$OUT"))"
-echo "OK: skill-content detects a person name via notion-redact.py"
+echo "OK: skill-content detects a person name via redact-names.py"
 
 # (c-infra) a missing names list must skip the sub-check, not fail the run or
 # report a finding — the redactor fails closed (exit 2 = missing/empty list),
 # and drift skips instead of crashing.
 DRIFT_SNAPSHOT="$TMP/snap" DRIFT_LIVE="$TMP/live" DRIFT_WIKI="$TMP/wiki" \
   DRIFT_MEMORY="$TMP/mem" DRIFT_SKILLS="$TMP/skills" \
-  NOTION_REDACT_BIN="$DIR/bin/notion-redact.py" \
+  REDACT_NAMES_BIN="$DIR/bin/redact-names.py" \
   CLASSIFY_NAMES_FILE="$TMP/no-such-names-file.txt" \
   "$BIN" > "$OUT" 2>"$TMP/infra-err"; RC=$?
 [ "$RC" -eq 0 ] || fail "missing names list should not fail the run, got $RC ($(cat "$OUT"))"

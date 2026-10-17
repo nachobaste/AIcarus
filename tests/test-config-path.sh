@@ -2,6 +2,7 @@
 # test-config-path.sh — config files live in config/ (or $DEVBRAIN_CONFIG_DIR), and a
 # per-file variable still wins. Covers both helpers (lib/config.sh, lib/config_path.py)
 # and real readers (bin/devbrain, bin/devbrain-preflight, bin/devbrain-verify-run).
+[ -z "${OPENCLAW_CLI+x}" ] && [ "${OPENCLAW_SHELL-}" != exec ] || { echo "FAIL: these tests do not run under OpenClaw" >&2; exit 1; }
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
@@ -42,6 +43,9 @@ P="$T/pf"; mkdir -p "$P/bin" "$P/lib" "$P/config" "$P/queue" "$P/projects/demo"
 cp "$DIR/bin/devbrain-preflight" "$DIR/bin/devbrain-verify-run" "$P/bin/"; cp "$DIR"/lib/*.py "$P/lib/"
 git -C "$P/projects/demo" init -q
 git -C "$P/projects/demo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+# demo declares a plain `npm test`: --check reviews it, so the test repo has to satisfy it.
+printf "package.json\nnode_modules/\n" >> "$P/projects/demo/.git/info/exclude"
+printf '{"scripts":{"test":"true"}}\n' > "$P/projects/demo/package.json"; mkdir "$P/projects/demo/node_modules"
 printf 'demo\n' > "$P/config/devbrain-projects.allow"
 printf 'demo=npm test\n' > "$P/config/devbrain-verify.commands"
 printf -- '---\nrepo: demo\nstatus: approved\nprioridad: 10\ncreado: 2026-01-01\naprobado: 2026-01-01\n---\n\nA task.\n' > "$P/queue/10-demo--task.plan.md"
