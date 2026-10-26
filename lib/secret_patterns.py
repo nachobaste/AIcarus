@@ -85,6 +85,18 @@ def find_secret(text):
     return None
 
 
+_CRED = re.compile(r"://(?P<cred>[^/\s?#]*)@(?P<host>\[[0-9A-Fa-f:]+\]|[^/\s:@?#]*)")
+
+
+def redact(text):
+    """`text` with every secret-shaped value masked; fails closed (the whole text is dropped) if one survives."""
+    for kind, rx in FORMATS:
+        text = rx.sub("[secret:%s]" % kind, text)
+    text = re.sub(r"(\[secret:[a-z-]+\])[A-Za-z0-9_.:-]{8,}", r"\1", text)   # a key glued to its tail
+    text = _CRED.sub(lambda m: "://[secret-url-credential]@" + m.group("host") if ":" in m.group("cred") else m.group(0), text)
+    return text if find_secret(text) is None else "[text omitted: secret shape I could not mask]"
+
+
 # ponytail: `.json`, `.txt` and `.sql` stay OUT of this list. Open question: a blocked plan that
 # dumps rows into one of them still travels. A repo that keeps migrations or verify scripts as
 # `.sql` would be stopped on every blocked branch by listing it. To add one, add its extension

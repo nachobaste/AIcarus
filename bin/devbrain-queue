@@ -44,7 +44,7 @@ source "$LIB/day.sh"
 DAY_ENGINE="${DAY_ENGINE:-$LIB/day_engine.py}"; export DAY_ENGINE
 mkdir -p "$QUEUE_DIR"
 
-usage() { echo "usage: devbrain-queue add <repo|-> [--fuente telegram] \"<task>\" | list | pause <file> \"<reason>\" | resume <file> | show <n> | approve <n> | requeue <n> | deny <n> \"<reason>\" | change <n>: \"<note>\" | dale <n> | no <n> \"<reason>\""; exit 1; }
+usage() { echo "usage: devbrain-queue add <repo|-> [--fuente telegram] \"<task>\" | list | pause <file> \"<reason>\" | resume <file> | show <n> | approve <n> [<note: required if the tenth man blocks>] | requeue <n> | deny <n> \"<reason>\" | change <n>: \"<note>\" | dale <n> | no <n> \"<reason>\""; exit 1; }
 [ $# -ge 1 ] || usage
 
 
@@ -194,10 +194,26 @@ approve)
   # Nobody approves on their own: a person runs this, in the moment. A request that came in
   # through a source (Telegram) is approved only after the planner drafted it (`planificado:`);
   # one written by hand (no `fuente:`) as always.
-  [ $# -eq 2 ] || usage
+  # `approve <n> <note>`: the note is only used to override a `disenso: BLOCKS` from the tenth man.
+  [ $# -ge 2 ] || usage
   F="$(plan_by_prio "$2")" || exit $?
   ST="$(fm_get "$F" status)"
   [ "$ST" = "requested" ] || { echo "ERROR: #$2 is '$ST'; only a 'requested' plan can be approved"; exit 3; }
+  OVERRIDE=""; OVERRIDE_NOTE="${*:3}"
+  if queue_disenso_bloquea "$F"; then
+    # Overriding the dissent is a human act: an agent (DEVBRAIN_VIA) cannot, and without a note nothing is written.
+    # Only a real terminal counts as a human: stdin and stdout are a tty, there is a controlling tty owned by this
+    # user, no OPENCLAW_*, and no DEVBRAIN_VIA / DEVBRAIN_CITA (an agent that says who it is has said it is not one).
+    if [ -n "${DEVBRAIN_VIA+x}" ] || [ -n "${DEVBRAIN_CITA+x}" ] || [ "$(compgen -e | grep -c '^OPENCLAW_' || true)" != 0 ] \
+       || ! { [ -t 0 ] && [ -t 1 ] && { : < /dev/tty; } 2>/dev/null && [ -O "$(/usr/bin/tty 2>/dev/null)" ]; }; then
+      echo "ERROR: #$2 has a BLOCKS dissent from the tenth man; only a person overrides it, from a terminal (not an agent)"; exit 3
+    fi
+    [ -n "$(printf '%s' "$OVERRIDE_NOTE" | tr -d '[:space:]')" ] \
+      || { echo "ERROR: #$2 has a BLOCKS dissent from the tenth man (section '## Tenth man' of the plan). To override it: approve $2 <note with your reason>"; exit 2; }
+    OVERRIDE=1
+  elif [ $# -ne 2 ]; then
+    usage
+  fi
   if [ -n "$(fm_get "$F" fuente)" ] && [ -z "$(fm_get "$F" planificado)" ]; then
     echo "ERROR: #$2 has no plan yet (the planner is drafting it); a request without a plan is not approved"
     exit 3
@@ -210,6 +226,13 @@ approve)
     echo "#$2 was NOT approved: it does not pass the preflight. Fix it first (change $2: ...):"
     printf '%s\n' "$PF_OUT"
     exit 7
+  fi
+  # Approving is not blocked by premises (the decision is yours), but you see them first: the plan will not run
+  # while a premise is FALSE/UNVERIFIABLE or unverified (queue_premisas_ok gates every dispatch).
+  PM_OUT="$(queue_premisas_ok "$F" 2>&1)" || echo "WARNING: #$2 is approved, but will NOT run until its premises pass — $PM_OUT (devbrain-verifier <plan> or change $2: ...)"
+  if [ -n "$OVERRIDE" ]; then
+    fm_set "$F" disenso_anulado "$(date +%Y-%m-%d) $OVERRIDE_NOTE"
+    fm_set "$F" disenso_resultado anulado
   fi
   fm_set "$F" aprobado "$(date +%Y-%m-%d)"
   fm_set "$F" status approved
@@ -246,6 +269,7 @@ deny)
   F="$(plan_by_prio "$2")" || exit $?
   ST="$(fm_get "$F" status)"
   case "$ST" in requested|question) ;; *) echo "ERROR: #$2 is '$ST'; only a 'requested' or 'question' plan can be denied"; exit 3 ;; esac
+  queue_disenso_bloquea "$F" && fm_set "$F" disenso_resultado confirmado   # the dissent was right
   fm_set "$F" motivo_fallo "${*:3}"
   fm_set "$F" status superseded
   queue_commit_and_push "$QUEUE_DIR" "queue: deny $(basename "$F")"
@@ -267,6 +291,9 @@ change)
   fm_del "$F" planificado
   fm_del "$F" aprobado
   fm_del "$F" verificado   # a changed plan is verified again
+  fm_del "$F" disenso_resultado   # a result from an earlier cycle (overridden) does not carry into the changed plan's count
+  queue_disenso_bloquea "$F" && fm_set "$F" disenso_resultado confirmado
+  fm_del "$F" disenso; fm_del "$F" disenso_anulado   # a changed plan is dissented again
   fm_set "$F" status requested
   queue_commit_and_push "$QUEUE_DIR" "queue: change $(basename "$F")"
   echo "Noted on #$N: it will be planned again"

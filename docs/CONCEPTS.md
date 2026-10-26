@@ -171,6 +171,64 @@ An unattended session verifies its own work with the commands you declared in
   before writing `aprobado:`. A plan that cannot run is refused while you are present.
   See `docs/wiki-example/lessons/a-permission-that-exists-is-not-a-permission-that-works.md`.
 
+## The premise verifier (`devbrain-verifier`)
+
+A plan is written from what a session believes about the code, and some of that is wrong. The
+convention: a fact the plan depends on goes on its own line as
+`- <fact about the code> :: <relative path>:<line>`. `bin/devbrain-verifier <plan>` then runs a
+**read-only** Claude Code session (Read, Glob, Grep; plan permission mode) on a clean checkout of
+the base branch. For each premise the session answers `HOLDS`, `FALSE` (with `WHAT IS TRUE:`) or
+`UNVERIFIABLE`, plus `ALREADY EXISTS: yes|no|unknown`. The script writes the verdict at the end of
+the line, a `## Verifier (written by devbrain-verifier)` section, and `verificado: <date> (N HOLDS,
+N FALSE, N UNVERIFIABLE)` in the frontmatter.
+
+The gate, `queue_premisas_ok` in `lib/queue.sh`, fails closed. `devbrain-night` skips a plan whose
+premises are `FALSE`, `UNVERIFIABLE`, or have no verdict. `approve` only warns (the decision is yours,
+but you see why the plan will not run), `change` deletes `verificado:` so the changed plan is checked
+again, the planner runs the verifier on every draft and the digest lists approved plans held by it.
+A citation that does not resolve to a real file and line never reaches the model, and the worst
+verdict wins. `tests/canary/verifier` is a fixture with known answers: `run.sh` runs the real
+verifier on it and compares, and `tests/test-verifier-canary-check.sh` proves the comparison
+catches a verifier that answers `HOLDS` to everything.
+
+## The tenth man (`devbrain-tenth-man`)
+
+Everyone who touches a plan (planner, reviewer, you) tends to agree with it. The tenth man is a
+separate, read-only session (Read/Glob/Grep, no MCP) whose only job is to assume the plan will fail
+and say how. It never decides: `lib/tenth_validate.py` checks the answer and COMPUTES the verdict.
+An objection counts only with evidence (`path:line` of a file that exists inside the repo, or
+`SCENARIO: ` plus 50 characters), and `disenso: BLOCKS` is written only if an objection with
+evidence says `MUST FIX`. A vague objection is rewritten as `NO EVIDENCE :: RISK`; empty or
+malformed output is `disenso: UNAVAILABLE`: visible, never blocking.
+
+- `devbrain-tenth-man plan <plan.md>` runs from the planner on every new draft and writes the
+  `## Tenth man` section plus `disenso:`; a new dissent deletes the old `disenso_anulado:`.
+- `devbrain-night` skips a plan that is `BLOCKS` and not overridden. Only a person at a real
+  terminal overrides: `devbrain-queue approve <n> "<reason>"` (an agent, `DEVBRAIN_VIA`, or a missing
+  note refuses and writes nothing). It records `disenso_anulado:` and `disenso_resultado: anulado`.
+- `change` and `deny` on a blocked plan record `disenso_resultado: confirmado`; the digest lists
+  blocked plans and counts how dissents turned out (overridden, confirmed, wrong, right, missed).
+- `devbrain execute` adds `## Tenth man (mandatory dissent)` to the PR body; it informs, it does not
+  stop the PR. A session that already took part in the plan cannot dissent.
+
+## The security reviewer (`devbrain-security`)
+
+A fresh read-only session (tools `Read,Glob,Grep`, no network, no MCP) reviews the diff of a PR
+(`devbrain-security pr <worktree> <base-ref> <plan>`) or of a plan (`devbrain-security plan <plan.md>`)
+for secrets, injection, permissions, personal data, dependencies, agent configuration and
+production changes. `lib/security.py` (`devbrain-security-accept`) validates the answer: a finding
+needs a real `file:line`, a known category and `confidence: 80` or more; secrets in the text are
+masked. A fixed rule on the diff (changes to agent configuration files such as `.claude/settings*.json`,
+`.mcp.json`, hooks, or a broadened `allowedTools`) blocks whatever the model says. The session
+must be registered, new and used for this role only.
+
+- `devbrain execute` appends `## Security review` to the PR body. On `SECURITY: BLOCKS` the PR is
+  opened as a draft titled `[SECURITY: BLOCKS] ...`.
+- `devbrain-security-accept state --dir <dir> --plan <n>` prints `clear`, `blocks` or `overridden`;
+  an override needs a note and is bound to the hash of that result, so a new run is not covered.
+- Results live in `~/.devbrain/security` (`DEVBRAIN_SECURITY_DIR`). Not ported: the queue
+  approve verb that records an override and the digest line; use `devbrain-security-accept override`.
+
 ## The "deliberate act" config-file convention
 
 Five plain-text files in `config/` — `devbrain-projects.allow`,
@@ -203,6 +261,9 @@ It ships fully commented: the values shown are the defaults.
 | `review` | `bin/devbrain execute` (adversarial reviewer) | same as `plan` | same as `plan` |
 | `research` | `bin/devbrain-research` (findings and promote) | `claude-opus-5-5` | none |
 | `interview` | `bin/devbrain-interview` | `claude-opus-5-5` | none |
+| `verifier` | `bin/devbrain-verifier` | `claude-opus-5-5` | `high` (falls back to `plan`) |
+| `tenth` | `bin/devbrain-tenth-man` | `claude-opus-5-5` | `high` (falls back to `review`) |
+| `security_pr` | `bin/devbrain-security` | `claude-opus-5-5` | `high` (falls back to `review`) |
 | `digest` | `bin/devbrain-digest` | none | none |
 | `wikilint` | `bin/devbrain-wiki-lint` | none | none |
 

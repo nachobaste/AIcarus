@@ -1,0 +1,92 @@
+#!/bin/bash
+# bin/devbrain-verifier — checks a plan's premises against the real code.
+#
+#   devbrain-verifier [--root <dir>] <plan.md>
+#
+# A premise is a plan-body line `<claim> :: <path>:<line>`. The Claude session only READS
+# (Read/Glob/Grep in a temporary worktree of origin/<base>, or in --root if given) and replies
+# `claim :: VERDICT`. The verdict is WRITTEN BY THIS SCRIPT (lib/verifier.py): the model never
+# touches `verificado:`, `aprobado:` or `status:`. A citation that leaves the repo or does not
+# reach its line is not even asked of the model: it stays UNVERIFIABLE, in plain sight.
+# If the session fails, the plan does not change and the rc is 1. When it ends the plan carries
+# `verificado:` and a `## Verifier` section, and the gate (queue_premisas_ok, lib/queue.sh)
+# decides whether it may run.
+#
+# It does not approve, does not dispatch and does not commit: the planner calls it before
+# writing the plan into the queue, or you run it by hand.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/lib/queue.sh"      # fm_get, with_timeout
+source "$ROOT/lib/models.sh"     # models_resolve
+source "$ROOT/lib/config.sh"     # config_path
+
+SESSION_SECS="${DEVBRAIN_VERIFIER_SECS:-900}"
+PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
+CLAUDE_BIN="${DEVBRAIN_CLAUDE_BIN:-$HOME/.local/bin/claude}"
+LOG="${DEVBRAIN_VERIFIER_LOG:-$HOME/.openclaw/logs/verifier.log}"
+PY="$ROOT/lib/verifier.py"
+DISALLOWED="mcp__*,Read(//${HOME#/}/.openclaw/**),Read(//${HOME#/}/.ssh/**)"
+USAGE="usage: devbrain-verifier [--root <dir>] <plan.md>"
+
+mkdir -p "$(dirname "$LOG")"
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
+
+RT=""
+if [ "${1:-}" = "--root" ]; then RT="${2:-}"; shift 2 2>/dev/null || { echo "$USAGE" >&2; exit 2; }; fi
+PLAN="${1:-}"
+[ $# -eq 1 ] && [ -f "$PLAN" ] || { echo "$USAGE" >&2; exit 2; }
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/devbrain-verifier.XXXXXX")"; SRC=""; WT=""
+cleanup() {
+  [ -z "$WT" ] || git -C "$SRC" worktree remove --force "$WT" >/dev/null 2>&1
+  rm -rf "$WORK"
+  [ -z "$SRC" ] || git -C "$SRC" worktree prune >/dev/null 2>&1
+}
+trap cleanup EXIT
+
+models_resolve verifier claude-opus-5-5 high plan || exit 2
+SESS_ARGS=(${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"})
+
+# Read-only session: --tools leaves ONLY Read/Glob/Grep (nothing that writes or executes),
+# --allowedTools bounds them to the directory, --permission-mode plan just in case.
+# Same pattern as bin/devbrain-planner.
+claude_ro() { # <dir> ; prompt on stdin, reply on stdout
+  local d; d="$(cd "$1" && pwd -P)" || return 1
+  ( cd "$d" && with_timeout "$SESSION_SECS" "$CLAUDE_BIN" -p ${SESS_ARGS[@]+"${SESS_ARGS[@]}"} \
+      --permission-mode plan --tools "Read,Glob,Grep" --disallowedTools "$DISALLOWED" \
+      --allowedTools "Read(/$d/**),Glob(/$d/**),Grep(/$d/**)" 2>>"$LOG" )
+}
+
+if [ -n "$RT" ]; then
+  [ -d "$RT" ] || { echo "devbrain-verifier: --root $RT is not a directory" >&2; exit 2; }
+  CTX="the tree given with --root"
+else
+  # Temporary worktree of origin/<base>: the shared checkout may be behind.
+  REPO="$(fm_get "$PLAN" repo)"
+  [[ "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "devbrain-verifier: the plan does not name a valid repo (repo: '$REPO')" >&2; exit 1; }
+  SRC="$PROJECTS_DIR/$REPO"
+  [ -e "$SRC/.git" ] || { SRC=""; echo "devbrain-verifier: no checkout of $REPO in $PROJECTS_DIR" >&2; exit 1; }
+  BASE="$(grep -v '^#' "$(config_path devbrain-base-branch.override "$ROOT" 2>/dev/null)" 2>/dev/null | grep "^${REPO}=" | cut -d= -f2 || true)"
+  if [ "${DEVBRAIN_PREFLIGHT_NO_FETCH:-}" != 1 ]; then git -C "$SRC" fetch -q origin 2>>"$LOG" || log "fetch of $REPO failed; going on with what origin/ has"; fi
+  [ -n "$BASE" ] || BASE="$(git -C "$SRC" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+  BASE="${BASE:-main}"
+  WT="$WORK/wt"
+  git -C "$SRC" worktree add -q --detach "$WT" "origin/$BASE" >/dev/null 2>>"$LOG" \
+    || { WT=""; echo "devbrain-verifier: could not open origin/$BASE of $REPO" >&2; exit 1; }
+  RT="$WT"; CTX="origin/$BASE of $REPO ($(git -C "$WT" rev-parse --short HEAD))"
+fi
+
+python3 -I "$PY" prompt "$PLAN" "$RT" "$CTX" > "$WORK/prompt" 2>>"$LOG"; rc=$?
+case "$rc" in
+  0)  claude_ro "$RT" < "$WORK/prompt" > "$WORK/reply" || exit 1  # the session failed
+      ;;
+  10) : > "$WORK/reply" ;;      # no citation can be checked (or there are no premises): nothing to ask the model
+  *)  echo "devbrain-verifier: could not read the plan (rc=$rc)" >&2; exit 1 ;;
+esac
+
+VALUE="$(python3 -I "$PY" apply "$PLAN" "$RT" "$WORK/reply" "$CTX" 2>>"$LOG")" \
+  || { echo "devbrain-verifier: could not write the plan; it stays as it was" >&2; exit 1; }
+log "$(basename "$PLAN"): $VALUE"
+echo "verificado: $VALUE"

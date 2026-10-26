@@ -73,9 +73,12 @@ echo "OK: the reviewer's diff compares against origin"
 
 # The PR base is a branch NAME for gh, not a remote-tracking ref. Fixing it would break
 # `gh pr create`, so it must stay bare — this test exists to stop a well-meaning fix.
-grep -q -- '--base "origin/\$DEFAULT_BRANCH"' "$DB" \
+# Only the `gh pr create` call is checked: the tenth man also takes --base, but as a git ref for
+# `git diff`, where origin/$DEFAULT_BRANCH is correct.
+GH_CALL=$(grep -A3 'gh pr create --title' "$DB")
+printf '%s\n' "$GH_CALL" | grep -q -- '--base "origin/\$DEFAULT_BRANCH"' \
   && fail "gh pr create --base must be a branch name, not a remote ref"
-grep -q -- '--base "\$DEFAULT_BRANCH"' "$DB" \
+printf '%s\n' "$GH_CALL" | grep -q -- '--base "\$DEFAULT_BRANCH"' \
   || fail "gh pr create --base is neither the plain branch name nor the remote ref"
 echo "OK: gh pr create --base stays a plain branch name"
 

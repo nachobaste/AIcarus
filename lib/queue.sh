@@ -168,6 +168,43 @@ queue_plan_body() { # <plan file> -> the plan without its frontmatter
   awk 'NR==1 && $0=="---" {infm=1; next} infm==1 && $0=="---" {infm=2; next} infm==2 {print}' "$1"
 }
 
+# queue_premisas_ok <plan file> -> 0 if the plan's premises hold. A premise is a body line
+# `<claim> :: <path>:<line>`; bin/devbrain-verifier appends `:: HOLDS|FALSE|UNVERIFIABLE` and writes `verificado:`.
+# Fails (rc 1, ONE line on stderr) when a premise is FALSE or UNVERIFIABLE, when there are premises and `verificado:`
+# is empty, or when one has no verdict. A plan with no premise line passes. Every way to run a plan calls this
+# (devbrain-night's next_plan); `approve` only warns. Fail closed: if the checker cannot read the plan, it does not run.
+queue_premisas_ok() {
+  local f="$1" out rc
+  out="$(python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verifier.py" gate "$f" 2>&1 < /dev/null)"; rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out" >&2
+  [ "$rc" -eq 0 ] || return 1  # fail closed
+  return 0
+}
+
+# queue_disenso_bloquea <plan file> -> 0 if the tenth man blocks the plan: `disenso: BLOCKS` and no
+# `disenso_anulado:` (the human override, written by `approve <n> <note>`). No dissent or UNAVAILABLE: 1.
+queue_disenso_bloquea() {
+  [ "$(fm_get "$1" disenso)" = "BLOCKS" ] && [ -z "$(fm_get "$1" disenso_anulado)" ]
+}
+
+# tenth_counts <queue_dir> -> "overridden A · confirmed C · wrong S · right X · missed N".
+# Outcomes of the tenth man, from the plans' own state: overridden = a human overrode and the plan is still
+# approved; wrong = overrode and it finished (done); right = overrode and it failed; confirmed = the human changed
+# or denied a blocked plan; missed = it did not block (DOES NOT BLOCK / UNAVAILABLE) and the plan failed.
+tenth_counts() {
+  local f r d st a=0 c=0 s=0 x=0 n=0
+  for f in "$1"/*.plan.md; do
+    [ -e "$f" ] || continue
+    r="$(fm_get "$f" disenso_resultado)"; d="$(fm_get "$f" disenso)"; st="$(fm_get "$f" status)"
+    case "$r" in
+      anulado) case "$st" in done) s=$((s+1)) ;; failed) x=$((x+1)) ;; *) a=$((a+1)) ;; esac ;;
+      confirmado) c=$((c+1)) ;;
+      *) [ "$d" != "BLOCKS" ] && [ -n "$d" ] && [ "$st" = failed ] && n=$((n+1)) ;;
+    esac
+  done
+  echo "overridden $a · confirmed $c · wrong $s · right $x · missed $n"
+}
+
 recorta() { # <n> [suffix] — stdin cut to n CHARACTERS (not bytes), with the suffix if it was cut
   python3 -c 'import sys;n=int(sys.argv[1]);s=sys.stdin.read().strip();print(s if len(s)<=n else s[:n].rstrip()+sys.argv[2])' "$1" "${2:-…}"
 }
