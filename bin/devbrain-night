@@ -118,6 +118,7 @@ while in_window && PLAN=$(next_plan); do
   fi
   mkdir -p "$DIR/.devbrain"
   plan_body "$PLAN" > "$DIR/.devbrain/plan-latest.md"
+  fm_get "$PLAN" prioridad > "$DIR/.devbrain/prio-latest.txt"   # the security review needs the plan number
   plan_body "$PLAN" | grep -v '^#' | grep -v '^$' | head -1 > "$DIR/.devbrain/task-latest.txt"
   [ -s "$DIR/.devbrain/task-latest.txt" ] || echo "$BASE" > "$DIR/.devbrain/task-latest.txt"
 

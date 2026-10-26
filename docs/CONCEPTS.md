@@ -211,6 +211,24 @@ malformed output is `disenso: UNAVAILABLE`: visible, never blocking.
 - `devbrain execute` adds `## Tenth man (mandatory dissent)` to the PR body; it informs, it does not
   stop the PR. A session that already took part in the plan cannot dissent.
 
+## The security reviewer (`devbrain-security`)
+
+A fresh read-only session (tools `Read,Glob,Grep`, no network, no MCP) reviews the diff of a PR
+(`devbrain-security pr <worktree> <base-ref> <plan>`) or of a plan (`devbrain-security plan <plan.md>`)
+for secrets, injection, permissions, personal data, dependencies, agent configuration and
+production changes. `lib/security.py` (`devbrain-security-accept`) validates the answer: a finding
+needs a real `file:line`, a known category and `confidence: 80` or more; secrets in the text are
+masked. A fixed rule on the diff (changes to agent configuration files such as `.claude/settings*.json`,
+`.mcp.json`, hooks, or a broadened `allowedTools`) blocks whatever the model says. The session
+must be registered, new and used for this role only.
+
+- `devbrain execute` appends `## Security review` to the PR body. On `SECURITY: BLOCKS` the PR is
+  opened as a draft titled `[SECURITY: BLOCKS] ...`.
+- `devbrain-security-accept state --dir <dir> --plan <n>` prints `clear`, `blocks` or `overridden`;
+  an override needs a note and is bound to the hash of that result, so a new run is not covered.
+- Results live in `~/.devbrain/security` (`DEVBRAIN_SECURITY_DIR`). Not ported: the queue
+  approve verb that records an override and the digest line; use `devbrain-security-accept override`.
+
 ## The "deliberate act" config-file convention
 
 Five plain-text files in `config/` — `devbrain-projects.allow`,
@@ -245,6 +263,7 @@ It ships fully commented: the values shown are the defaults.
 | `interview` | `bin/devbrain-interview` | `claude-opus-5-5` | none |
 | `verifier` | `bin/devbrain-verifier` | `claude-opus-5-5` | `high` (falls back to `plan`) |
 | `tenth` | `bin/devbrain-tenth-man` | `claude-opus-5-5` | `high` (falls back to `review`) |
+| `security_pr` | `bin/devbrain-security` | `claude-opus-5-5` | `high` (falls back to `review`) |
 | `digest` | `bin/devbrain-digest` | none | none |
 | `wikilint` | `bin/devbrain-wiki-lint` | none | none |
 

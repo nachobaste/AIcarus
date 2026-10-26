@@ -126,6 +126,8 @@ bin/            the actual commands (devbrain, devbrain-queue, devbrain-planner,
                 and the queue refuses a plan with a false premise — see docs/CONCEPTS.md)
                 (devbrain-tenth-man argues against every plan and PR, read-only; a dissent with
                 evidence blocks the plan until a person overrides it — see docs/CONCEPTS.md)
+                (devbrain-security reviews each PR diff for security, read-only; a fixed rule
+                that never depends on the model makes the PR a draft — see docs/CONCEPTS.md)
 lib/            shared shell/python helpers sourced by bin/*
 claude/         Claude Code skills, status line and hooks (claude/hooks/ blocks dumping
                 config files that hold API keys) used by the coding-agent side

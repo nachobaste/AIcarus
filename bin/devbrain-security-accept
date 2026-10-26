@@ -1,0 +1,8 @@
+#!/bin/bash
+# devbrain-security-accept: the script decides, not the model. Thin on purpose: all the logic lives in
+# lib/security.py (`python3 -I`: nothing reads environment variables).
+#   accept:   --mode pr|plan --plan <id> --worktree <dir> --dir <dir> [--input f] [--output f] ...
+#   state:    state --dir <dir> --plan <id> [--mode pr|plan]   -> clear | blocks | overridden
+#   override: override --dir <dir> --plan <id> [--mode ..] --via <v> --note <text>
+set -euo pipefail
+exec /usr/bin/env python3 -I "$(cd "$(dirname "$0")/.." && pwd)/lib/security.py" "$@"
