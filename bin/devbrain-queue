@@ -211,6 +211,9 @@ approve)
     printf '%s\n' "$PF_OUT"
     exit 7
   fi
+  # Approving is not blocked by premises (the decision is yours), but you see them first: the plan will not run
+  # while a premise is FALSE/UNVERIFIABLE or unverified (queue_premisas_ok gates every dispatch).
+  PM_OUT="$(queue_premisas_ok "$F" 2>&1)" || echo "WARNING: #$2 is approved, but will NOT run until its premises pass — $PM_OUT (devbrain-verifier <plan> or change $2: ...)"
   fm_set "$F" aprobado "$(date +%Y-%m-%d)"
   fm_set "$F" status approved
   queue_commit_and_push "$QUEUE_DIR" "queue: approve $(basename "$F")"

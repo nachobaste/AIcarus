@@ -168,6 +168,19 @@ queue_plan_body() { # <plan file> -> the plan without its frontmatter
   awk 'NR==1 && $0=="---" {infm=1; next} infm==1 && $0=="---" {infm=2; next} infm==2 {print}' "$1"
 }
 
+# queue_premisas_ok <plan file> -> 0 if the plan's premises hold. A premise is a body line
+# `<claim> :: <path>:<line>`; bin/devbrain-verifier appends `:: HOLDS|FALSE|UNVERIFIABLE` and writes `verificado:`.
+# Fails (rc 1, ONE line on stderr) when a premise is FALSE or UNVERIFIABLE, when there are premises and `verificado:`
+# is empty, or when one has no verdict. A plan with no premise line passes. Every way to run a plan calls this
+# (devbrain-night's next_plan); `approve` only warns. Fail closed: if the checker cannot read the plan, it does not run.
+queue_premisas_ok() {
+  local f="$1" out rc
+  out="$(python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verifier.py" gate "$f" 2>&1 < /dev/null)"; rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out" >&2
+  [ "$rc" -eq 0 ] || return 1  # fail closed
+  return 0
+}
+
 recorta() { # <n> [suffix] — stdin cut to n CHARACTERS (not bytes), with the suffix if it was cut
   python3 -c 'import sys;n=int(sys.argv[1]);s=sys.stdin.read().strip();print(s if len(s)<=n else s[:n].rstrip()+sys.argv[2])' "$1" "${2:-…}"
 }

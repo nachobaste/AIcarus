@@ -122,6 +122,8 @@ bin/            the actual commands (devbrain, devbrain-queue, devbrain-planner,
                 devbrain-night, devbrain-vigia, ...)
                 (devbrain-verify-run runs @subdir verification commands; devbrain-preflight
                 checks that approved plans can actually run — see docs/CONCEPTS.md)
+                (devbrain-verifier checks the facts a plan rests on against the code, read-only,
+                and the queue refuses a plan with a false premise — see docs/CONCEPTS.md)
 lib/            shared shell/python helpers sourced by bin/*
 claude/         Claude Code skills, status line and hooks (claude/hooks/ blocks dumping
                 config files that hold API keys) used by the coding-agent side

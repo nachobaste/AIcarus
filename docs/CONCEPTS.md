@@ -171,6 +171,26 @@ An unattended session verifies its own work with the commands you declared in
   before writing `aprobado:`. A plan that cannot run is refused while you are present.
   See `docs/wiki-example/lessons/a-permission-that-exists-is-not-a-permission-that-works.md`.
 
+## The premise verifier (`devbrain-verifier`)
+
+A plan is written from what a session believes about the code, and some of that is wrong. The
+convention: a fact the plan depends on goes on its own line as
+`- <fact about the code> :: <relative path>:<line>`. `bin/devbrain-verifier <plan>` then runs a
+**read-only** Claude Code session (Read, Glob, Grep; plan permission mode) on a clean checkout of
+the base branch. For each premise the session answers `HOLDS`, `FALSE` (with `WHAT IS TRUE:`) or
+`UNVERIFIABLE`, plus `ALREADY EXISTS: yes|no|unknown`. The script writes the verdict at the end of
+the line, a `## Verifier (written by devbrain-verifier)` section, and `verificado: <date> (N HOLDS,
+N FALSE, N UNVERIFIABLE)` in the frontmatter.
+
+The gate, `queue_premisas_ok` in `lib/queue.sh`, fails closed. `devbrain-night` skips a plan whose
+premises are `FALSE`, `UNVERIFIABLE`, or have no verdict. `approve` only warns (the decision is yours,
+but you see why the plan will not run), `change` deletes `verificado:` so the changed plan is checked
+again, the planner runs the verifier on every draft and the digest lists approved plans held by it.
+A citation that does not resolve to a real file and line never reaches the model, and the worst
+verdict wins. `tests/canary/verifier` is a fixture with known answers: `run.sh` runs the real
+verifier on it and compares, and `tests/test-verifier-canary-check.sh` proves the comparison
+catches a verifier that answers `HOLDS` to everything.
+
 ## The "deliberate act" config-file convention
 
 Five plain-text files in `config/` — `devbrain-projects.allow`,
@@ -203,6 +223,7 @@ It ships fully commented: the values shown are the defaults.
 | `review` | `bin/devbrain execute` (adversarial reviewer) | same as `plan` | same as `plan` |
 | `research` | `bin/devbrain-research` (findings and promote) | `claude-opus-5-5` | none |
 | `interview` | `bin/devbrain-interview` | `claude-opus-5-5` | none |
+| `verifier` | `bin/devbrain-verifier` | `claude-opus-5-5` | `high` (falls back to `plan`) |
 | `digest` | `bin/devbrain-digest` | none | none |
 | `wikilint` | `bin/devbrain-wiki-lint` | none | none |
 

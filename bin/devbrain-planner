@@ -160,7 +160,9 @@ You are the PLANNER of devbrain. You write a plan for a request the owner sent b
 unattended session will run the plan later, and the owner approves it before that.
 Your cwd is the repo \`$REPO\` at \`origin/$BASE\` (commit $SHA, $TODAY). You can only read.
 Read the code you need: every claim under "What was already verified" cites a real
-\`file:line\`; what you cannot check, you do not claim.
+\`file:line\`; what you cannot check, you do not claim. Write each fact as
+\`- <claim> :: <relative path>:<line>\` (with a space before and after the double colon): an
+independent verifier checks every line again and the plan does not run if one fails.
 
 Answer ONLY with this, no text before or after and no \`\`\` blocks:
 
@@ -178,7 +180,7 @@ repo: $REPO
 
 ## What was already verified ($TODAY, against \`origin/$BASE\` of $REPO)
 
-- <facts about the code, with file:line>
+- <fact about the code> :: <relative path>:<line>
 
 ## Files it touches
 
@@ -263,6 +265,9 @@ for attempt in 1 2; do
     echo; cat "$WORK/newbody"; echo; echo "## Request from chat"; echo; history
   } > "$CAND"
   fm_set "$CAND" repo "$REPO"; fm_set "$CAND" planificado "$TODAY"
+  # An independent reader checks every premise against this same tree. If the session fails the plan is written
+  # anyway WITHOUT `verificado:` and the gate (queue_premisas_ok) holds it: it never runs by itself.
+  "$ROOT/bin/devbrain-verifier" --root "$WT" "$CAND" >>"$LOG" 2>&1 || log "#$N: the verifier could not check the premises"
   ok=0; : > "$WORK/errs"
   if ! lint "$CAND"; then plan_errors; fi
   [ -s "$WORK/errs" ] || ok=1
@@ -274,6 +279,8 @@ for attempt in 1 2; do
     TITLE="$(sed -n 's/^# //p' "$PLAN" | head -1)"
     FILES="$(section 'files' 6)"
     ENV_PROBLEMS="$(env_errors)"
+    PREMISES="$(queue_premisas_ok "$PLAN" 2>&1)" || ENV_PROBLEMS="${ENV_PROBLEMS:+$ENV_PROBLEMS
+}Premises: $PREMISES"
     tg_send "$( { printf '📋 Plan #%s ready to approve — %s · repo %s\n\n' "$N" "$TITLE" "$REPO"
                   [ -n "$ENV_PROBLEMS" ] && printf '⚠️ Before approving:\n%s\n\n' "$ENV_PROBLEMS"
                   section 'why' 3
