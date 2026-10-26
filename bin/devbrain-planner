@@ -273,6 +273,11 @@ for attempt in 1 2; do
   [ -s "$WORK/errs" ] || ok=1
   if [ "$ok" = 1 ]; then
     cp "$CAND" "$PLAN"
+    # The tenth man argues against the plan that was just written; a new plan never inherits an old dissent.
+    # If the session fails the plan carries `disenso: UNAVAILABLE` (visible, does not block).
+    fm_del "$PLAN" disenso; fm_del "$PLAN" disenso_anulado
+    "${DEVBRAIN_TENTH_BIN:-$ROOT/bin/devbrain-tenth-man}" plan --dir "$WT" "$PLAN" >>"$LOG" 2>&1 || true
+    [ -n "$(fm_get "$PLAN" disenso)" ] || fm_set "$PLAN" disenso "UNAVAILABLE"
     queue_commit_and_push "$QUEUE_DIR" "queue: planned $(basename "$PLAN")"
     log "#$N: planned ($REPO)"
     section() { awk -v h="$1" -v max="$2" 'tolower($0) ~ "^## " h {f = 1; next} f && /^#/ {exit} f && NF {print; if (++n == max) exit}' "$PLAN"; }

@@ -64,6 +64,7 @@ next_plan() { # prints path of lowest-NN plan with status approved AND an aproba
     [ -n "$(fm_get "$f" aprobado)" ] || continue
     # FALSE, UNVERIFIABLE or unverified premises do not run, however well signed.
     queue_premisas_ok "$f" || continue
+    queue_disenso_bloquea "$f" && continue   # the tenth man blocks it until a person overrides it
     echo "$f"; return 0
   done
   return 1

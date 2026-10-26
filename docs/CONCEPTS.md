@@ -191,6 +191,26 @@ verdict wins. `tests/canary/verifier` is a fixture with known answers: `run.sh` 
 verifier on it and compares, and `tests/test-verifier-canary-check.sh` proves the comparison
 catches a verifier that answers `HOLDS` to everything.
 
+## The tenth man (`devbrain-tenth-man`)
+
+Everyone who touches a plan (planner, reviewer, you) tends to agree with it. The tenth man is a
+separate, read-only session (Read/Glob/Grep, no MCP) whose only job is to assume the plan will fail
+and say how. It never decides: `lib/tenth_validate.py` checks the answer and COMPUTES the verdict.
+An objection counts only with evidence (`path:line` of a file that exists inside the repo, or
+`SCENARIO: ` plus 50 characters), and `disenso: BLOCKS` is written only if an objection with
+evidence says `MUST FIX`. A vague objection is rewritten as `NO EVIDENCE :: RISK`; empty or
+malformed output is `disenso: UNAVAILABLE`: visible, never blocking.
+
+- `devbrain-tenth-man plan <plan.md>` runs from the planner on every new draft and writes the
+  `## Tenth man` section plus `disenso:`; a new dissent deletes the old `disenso_anulado:`.
+- `devbrain-night` skips a plan that is `BLOCKS` and not overridden. Only a person at a real
+  terminal overrides: `devbrain-queue approve <n> "<reason>"` (an agent, `DEVBRAIN_VIA`, or a missing
+  note refuses and writes nothing). It records `disenso_anulado:` and `disenso_resultado: anulado`.
+- `change` and `deny` on a blocked plan record `disenso_resultado: confirmado`; the digest lists
+  blocked plans and counts how dissents turned out (overridden, confirmed, wrong, right, missed).
+- `devbrain execute` adds `## Tenth man (mandatory dissent)` to the PR body; it informs, it does not
+  stop the PR. A session that already took part in the plan cannot dissent.
+
 ## The "deliberate act" config-file convention
 
 Five plain-text files in `config/` — `devbrain-projects.allow`,
@@ -224,6 +244,7 @@ It ships fully commented: the values shown are the defaults.
 | `research` | `bin/devbrain-research` (findings and promote) | `claude-opus-5-5` | none |
 | `interview` | `bin/devbrain-interview` | `claude-opus-5-5` | none |
 | `verifier` | `bin/devbrain-verifier` | `claude-opus-5-5` | `high` (falls back to `plan`) |
+| `tenth` | `bin/devbrain-tenth-man` | `claude-opus-5-5` | `high` (falls back to `review`) |
 | `digest` | `bin/devbrain-digest` | none | none |
 | `wikilint` | `bin/devbrain-wiki-lint` | none | none |
 

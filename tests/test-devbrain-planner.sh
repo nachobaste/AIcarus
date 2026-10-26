@@ -62,6 +62,17 @@ printf '## Constraints\n\n- Nothing else.\n\nCloses demo#3\n'
 FAKE
 chmod +x "$TMP/gh" "$TMP/curl" "$TMP/claude"
 
+# The tenth man is stubbed (it is tested in test-devbrain-tenth-man.sh): the planner must call it on the plan it wrote,
+# with the plan as the last argument; the stub records its arguments and, unless $TMP/tenth-fails exists, writes
+# `disenso: DOES NOT BLOCK`.
+cat > "$TMP/tenth" <<STUB
+#!/bin/bash
+echo "\$*" >> "$TMP/tenth-calls"
+[ -e "$TMP/tenth-fails" ] && exit 5
+sed -i.bak 's/^status:/disenso: DOES NOT BLOCK\nstatus:/' "\${@: -1}" && rm -f "\${@: -1}.bak"
+STUB
+chmod +x "$TMP/tenth"; export DEVBRAIN_TENTH_BIN="$TMP/tenth"
+
 run() { # [hour]
   HOME="$TMP/home" TMPDIR="$T" DEVBRAIN_QUEUE_DIR="$Q" DEVBRAIN_PROJECTS_DIR="$P" \
   DEVBRAIN_CONFIG_DIR="$CFG" DEVBRAIN_PREFLIGHT_NO_FETCH=1 DEVBRAIN_TG_CHAT_ID=1 DEVBRAIN_NO_TG=0 \
@@ -110,6 +121,13 @@ F="$Q/105-demo--request.plan.md"
 ! lint "$F" || die                                            # the environment is still behind
 grep -q 'Before approving' "$FAKE_DIR/tg-calls" && grep -q 'behind origin' "$FAKE_DIR/tg-calls" || die
 [ "$(cnt "$FAKE_DIR/claude-args")" = 1 ] || die               # no second session: it is not the plan's fault
+# --- The tenth man runs on the plan the planner wrote; if it fails the plan is marked UNAVAILABLE, never left blank ---
+[ "$(cnt "$TMP/tenth-calls")" = 1 ] && grep -q '^plan --dir ' "$TMP/tenth-calls" || die
+[ "$(fm "$F" disenso)" = "DOES NOT BLOCK" ] || die
+reset; touch "$TMP/tenth-fails"; request 106 demo "fix the button"
+run || die
+[ "$(fm "$Q/106-demo--request.plan.md" disenso)" = UNAVAILABLE ] || die
+rm -f "$TMP/tenth-fails"
 G -C "$P/demo" merge -q --ff-only origin/main
 
 # --- A valid plan, with a linked issue ---

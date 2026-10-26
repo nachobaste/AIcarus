@@ -160,6 +160,18 @@ for f in "$QUEUE_DIR"/*.plan.md; do
 "
 done
 
+# Plans the tenth man blocks (not overridden), and how its dissents have turned out. Textual, one line per plan.
+TENTH_HELD=""
+for f in "$QUEUE_DIR"/*.plan.md; do
+  [ -e "$f" ] || continue
+  case "$(fm_get "$f" status)" in requested|approved) ;; *) continue ;; esac
+  queue_disenso_bloquea "$f" || continue
+  TENTH_HELD="${TENTH_HELD}- #$(fm_get "$f" prioridad) $(basename "$f")
+"
+done
+TENTH_COUNTS="$(tenth_counts "$QUEUE_DIR")"
+case "$TENTH_COUNTS" in "overridden 0 · confirmed 0 · wrong 0 · right 0 · missed 0") TENTH_COUNTS="" ;; esac
+
 # The watch: scheduled jobs that are not loaded, failing or stalled (bin/devbrain-vigia).
 # Textual, never through the AI summarizer. It prints nothing on a machine without launchd (no
 # section then); "no findings" is one line, and if the script itself fails the digest says so.
@@ -218,6 +230,14 @@ if [ -n "$PREMISE_HELD" ]; then
 
 🧪 Approved plans held by their premises (run devbrain-verifier <plan>, or change <n>: ...):
 $PREMISE_HELD"
+fi
+
+if [ -n "$TENTH_HELD" ] || [ -n "$TENTH_COUNTS" ]; then
+  MSG="$MSG
+
+🔟 Tenth man${TENTH_HELD:+ — plans it blocks (read its section, then change <n>: ... or approve <n> <note>):
+$TENTH_HELD}${TENTH_COUNTS:+
+$TENTH_COUNTS}"
 fi
 
 if [ -n "$UNCLASSIFIED" ]; then
