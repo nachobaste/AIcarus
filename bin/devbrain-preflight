@@ -133,6 +133,21 @@ def queue_contract():
     return out
 
 
+def permissions_repo():
+    """Runs devbrain-permissions check. Fails closed: if it is missing or exits with anything but 0 or 1,
+    that is a problem. Its output is relayed only when it says exit 1 (its lines never carry values)."""
+    v = os.path.join(HERE, "devbrain-permissions")
+    try:
+        r = subprocess.run([v, "check"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ["permissions: the validator bin/devbrain-permissions could not run"]
+    if r.returncode == 0:
+        return []
+    if r.returncode == 1:
+        return [l for l in r.stdout.splitlines() if l.startswith("permissions:")] or ["permissions: the validator failed"]
+    return [f"permissions: the validator exited with {r.returncode}"]
+
+
 def behind_origin(d, branch="main"):
     if not NO_FETCH:
         git(d, "fetch", "-q", "origin", branch)
@@ -162,7 +177,7 @@ def main(argv):
     # The queue contract does not depend on any plan being approved: it is checked on every
     # run without --plan, and it goes first so a long list does not bury it.
     if not only:
-        problems += queue_contract()
+        problems += queue_contract() + permissions_repo()
 
     # 1. This checkout first: the permissions come from it.
     behind = behind_origin(ROOT)

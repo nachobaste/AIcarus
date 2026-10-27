@@ -9,19 +9,37 @@ The model never writes the verdict into the plan, nor `verificado:`, nor `aproba
 module parses it. Anything the model says that is not a `claim :: VERDICT` line, a `WHAT IS TRUE:` or an
 `ALREADY EXISTS:` line is discarded.
 
+Second form, no model: a premise checked with a read-only command.
+
+    <claim> :: cmd `grep -c PATTERN PATH` == N       (also `wc -l PATH` and `test -f PATH`; for test -f, N is 1 or 0)
+
+`gate` runs it itself (never the model's session): closed list, no shell (argv), only paths inside the plan's repo.
+HOLDS only if the result is exactly N; anything else that can be read as `cmd` is FALSE or UNVERIFIABLE and the
+gate does not pass. A hand-written `HOLDS` on a `cmd` line counts for nothing: it is re-run on every `gate`.
+
 Modes (called by bin/devbrain-verifier and lib/queue.sh, not by a human):
-    gate   <plan>                                  rc 0 if the plan may run; otherwise rc 1 and ONE line with the reason
+    gate   <plan> [<root>]                         rc 0 if the plan may run; otherwise rc 1 and ONE line with the reason
     prompt <plan> <root> <context>                 the session prompt on stdout; rc 10 if there is nothing to ask it
     apply  <plan> <root> <reply|-> <context>       writes verdicts, `verificado:` and the section; rc 0
 """
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unicodedata
 from datetime import date
 
 PREMISE = re.compile(r"^(.*\S) :: `?([^\s`]+:[0-9]+(?:-[0-9]+)?)`?(?: :: (HOLDS|FALSE|UNVERIFIABLE))?\s*$")
+# `cmd` premise: `<claim> :: cmd `<command>` == N`. Recognized when what follows `:: cmd ` starts with a backtick
+# (or the claim has none: an unquoted `cmd` is a form error, not prose that talks about the form).
+CMD = re.compile(r"^(.*\S) :: cmd\b ?(.*)$")
+CMD_FORM = re.compile(r"^`([^`]*)` == ([0-9]{1,9})$")   # N capped: int() of thousands of digits raises ValueError
+SAFE = re.compile(r"^[\w.:/=@%,+^-]+$")   # ponytail: no spaces or quotes in pattern and path; widen if a real plan needs it
+CMD_SECS = 10
+# Checkout name that stands for THIS kit's own root when it is not under DEVBRAIN_PROJECTS_DIR (the kit is
+# usually cloned elsewhere). Default: the directory name of this checkout.
+SELF_REPO = os.environ.get("DEVBRAIN_SELF_REPO") or os.path.basename(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 BAD_VERDICTS = ("FALSE", "UNVERIFIABLE")
 # fails closed: ANY line with `:: FALSE|UNVERIFIABLE` (whatever the case, citation or notes) blocks
 BAD_VERDICT = re.compile(r"^(.*?)\s::\s*(" + "|".join(BAD_VERDICTS) + r")\b", re.I)
@@ -82,6 +100,78 @@ def premises(body):
     return out
 
 
+def cmd_premises(body):
+    """-> [(index, claim, what follows `:: cmd `)] of the lines that ask for a check by command."""
+    out = []
+    for i, l in zone(body):
+        m = CMD.match(l)
+        if m and (m.group(2).startswith("`") or "`" not in m.group(1)):
+            out.append((i, m.group(1), m.group(2).strip()))
+    return out
+
+
+def path_in_repo(root, path, regular):
+    """'' if <path> is relative, without `..`, of safe characters and falls inside <root> (following links); else the reason."""
+    if not SAFE.match(path) or path.startswith("-") or os.path.isabs(path) or ".." in path.split("/"):
+        return f"path not allowed: {path}"
+    base = os.path.realpath(root)
+    p = os.path.realpath(os.path.join(base, path))
+    if not p.startswith(base + os.sep):
+        return f"path outside the plan's repo: {path}"
+    if regular and os.path.exists(p) and not os.path.isfile(p):
+        return f"not a regular file: {path}"
+    return ""
+
+
+def allowed(argv, root):
+    """'' if the command is in the closed list (grep -c PATTERN PATH | wc -l PATH | test -f PATH) and its path is in the repo."""
+    if argv[:2] == ["grep", "-c"] and len(argv) == 4 and SAFE.match(argv[2]) and not argv[2].startswith("-"):
+        return path_in_repo(root, argv[3], True)
+    if argv[:2] == ["wc", "-l"] and len(argv) == 3:
+        return path_in_repo(root, argv[2], True)
+    if argv[:2] == ["test", "-f"] and len(argv) == 3:
+        return path_in_repo(root, argv[2], False)
+    return "command outside the closed list (grep -c, wc -l, test -f)"
+
+
+def check_cmd(root, rest):
+    """-> (HOLDS|FALSE|UNVERIFIABLE, reason). No shell: the command is an argument list and runs with cwd in the repo."""
+    m = CMD_FORM.match(rest)
+    if not m:
+        return "UNVERIFIABLE", "expected form: cmd `<command>` == N"
+    if not root or not os.path.isdir(root):
+        return "UNVERIFIABLE", "no checkout of the plan's repo to check it in"
+    argv, expected = m.group(1).split(), int(m.group(2))
+    bad = allowed(argv, root)
+    if bad:
+        return "UNVERIFIABLE", bad
+    try:
+        r = subprocess.run(argv, cwd=root, stdin=subprocess.DEVNULL, capture_output=True, timeout=CMD_SECS,
+                           env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "UNVERIFIABLE", f"did not run ({type(e).__name__})"
+    if r.returncode not in (0, 1):
+        return "FALSE", f"exited with code {r.returncode}"
+    try:
+        value = (1 if r.returncode == 0 else 0) if argv[0] == "test" else int(r.stdout.split()[0])
+    except (IndexError, ValueError):
+        return "FALSE", "unreadable output"
+    return ("HOLDS", "") if value == expected else ("FALSE", f"got {value}, the premise says {expected}")
+
+
+def plan_root(fm):
+    """The checkout of the plan's repo: <DEVBRAIN_PROJECTS_DIR or ~/dev/projects>/<repo>; None if there is none.
+    Only fallback: this kit's own root, for a plan whose `repo:` is SELF_REPO and has no directory there."""
+    repo = fm.get("repo", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", repo):   # no `/`, no `..`, no absolute path: never leaves projects
+        return None
+    d = os.path.join(os.environ.get("DEVBRAIN_PROJECTS_DIR") or os.path.expanduser("~/dev/projects"), repo)
+    if os.path.isdir(d):
+        return d
+    # ponytail: only the kit itself; any other repo without a checkout stays UNVERIFIABLE (generalizing needs an explicit list)
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__))) if repo == SELF_REPO else None
+
+
 def citation_resolves(root, cite):
     """The citation is `path:line` or `path:from-to`, relative, without `..`, inside <root>, a file that exists and reaches that line."""
     path, _, n = cite.rpartition(":")
@@ -116,15 +206,20 @@ def classify(root, rows):
 
 
 # ---- the gate ----------------------------------------------------------------------------------------------------
-def gate(path):
-    """-> (rc, reason). Fails closed: anything that cannot be read is a 1 (main catches it)."""
+def gate(path, root=None):
+    """-> (rc, reason). Fails closed: anything that cannot be read is a 1 (main catches it).
+
+    Known limit: `cmd` premises are checked against the LOCAL checkout of the plan's repo (<root>, or plan_root),
+    which may be behind origin/<base> or hold uncommitted changes. devbrain-verifier (citations, with a model)
+    does use a temporary worktree of origin/<base>; `gate` does not."""
     fm, _, body = read(path)
     rows = premises(body)
+    cmds = cmd_premises(body)
     bad = [m for m in (BAD_VERDICT.match(l) for _, l in zone(body)) if m]
     if bad:
         extra = f" (and {len(bad) - 1} more)" if len(bad) > 1 else ""
         return 1, f"premise {bad[0].group(2).upper()}: {clip(norm(bad[0].group(1)))}{extra}"
-    if not rows:
+    if not rows and not cmds:
         # a `x :: <something with digits>` line that no citation form recognizes: not let through as "no premises"
         odd = [l for _, l in zone(body) if " :: " in l and re.search(r"[0-9]", l.split(" :: ", 1)[1])]
         if odd:
@@ -136,6 +231,10 @@ def gate(path):
     unmarked = [r for r in rows if r[3] is None]
     if unmarked:
         return 1, f"premise without a verdict: {clip(norm(unmarked[0][1]))}; devbrain-verifier has not run"
+    for _, claim, rest in cmds:    # no model, on every gate: what the plan says about its own verdict counts for nothing
+        v, reason = check_cmd(root or plan_root(fm), rest)
+        if v != "HOLDS":
+            return 1, f"premise {v}: {clip(norm(claim))} ({reason})"
     return 0, ""
 
 
@@ -290,8 +389,8 @@ def apply(path, root, reply, context):
 def main(argv):
     try:
         mode = argv[1]
-        if mode == "gate" and len(argv) == 3:
-            rc, reason = gate(argv[2])
+        if mode == "gate" and len(argv) in (3, 4):
+            rc, reason = gate(argv[2], argv[3] if len(argv) == 4 else None)
             if reason:
                 print(reason)
             return rc
@@ -305,7 +404,7 @@ def main(argv):
             resp = "" if argv[4] == "-" else open(argv[4], encoding="utf-8", errors="replace").read()
             print(apply(argv[2], argv[3], resp, argv[5]))
             return 0
-        print("usage: verifier.py gate <plan> | prompt <plan> <root> <context> | apply <plan> <root> <reply|-> <context>",
+        print("usage: verifier.py gate <plan> [<root>] | prompt <plan> <root> <context> | apply <plan> <root> <reply|-> <context>",
               file=sys.stderr)
         return 2
     except Exception as e:  # fails closed: the gate reads an rc != 0 as "does not pass"

@@ -9,6 +9,7 @@ set -uo pipefail
 PF="$(cd "$(dirname "$0")/.." && pwd)/bin/devbrain-preflight"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/config" "$T/projects"
+: > "$T/config/devbrain-projects.allow"; : > "$T/config/devbrain-projects.excluded"  # the preflight validates both
 export DEVBRAIN_QUEUE_DIR="$T/queue" DEVBRAIN_MC_DIR="$T/config" \
   DEVBRAIN_PROJECTS_DIR="$T/projects" DEVBRAIN_PREFLIGHT_NO_FETCH=1
 ok=0; bad=0

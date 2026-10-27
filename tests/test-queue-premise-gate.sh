@@ -177,7 +177,7 @@ mutate "ignores UNVERIFIABLE" lib/verifier.py "s.replace('BAD_VERDICTS = (\"FALS
 must_red "ignores UNVERIFIABLE" unverifiable_does_not_pass_anywhere
 mutate "accepts an empty verificado: with premises" lib/verifier.py "s.replace('if not verified:', 'if False:')"
 must_red "accepts an empty verificado:" unverified_premises_do_not_pass
-mutate "only plans with planificado:" lib/verifier.py "s.replace('def gate(', 'def gate(path):\n    return gate_old(path) if \"\\\\nplanificado:\" in open(path, encoding=\"utf-8\").read() else (0, \"\")\n\n\ndef gate_old(')"
+mutate "only plans with planificado:" lib/verifier.py "s.replace('def gate(', 'def gate(path, root=None):\n    return gate_old(path, root) if \"\\\\nplanificado:\" in open(path, encoding=\"utf-8\").read() else (0, \"\")\n\n\ndef gate_old(')"
 must_red "only plans with planificado:" applies_without_planificado
 mutate "the verifier section is an exempt zone" lib/verifier.py "s.replace('EXEMPT = \"## Tenth man (written by devbrain-tenth-man)\"', 'EXEMPT = \"## Verifier\"')"
 must_red "the verifier section is an exempt zone" the_verifier_section_is_not_exempt

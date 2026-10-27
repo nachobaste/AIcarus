@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""devbrain-permissions check — validates the permission files that live in this repo.
+
+    config/devbrain-projects.allow  (+ devbrain-projects.excluded)
+    openclaw/exec-approvals.json    (the repo COPY, never the live one under ~/.openclaw)
+
+Exit 0 if healthy. Otherwise exit 1 plus one line per problem: `permissions: <file>: <what is wrong>`.
+Read-only: it writes nothing but stdout.
+
+Fails closed: a missing or unreadable file, or an unexpected shape, is a problem, never a green.
+
+It NEVER prints a value it read (an agent name, a pattern or a repo name can be a key): each
+problem says WHERE it is (line number, `agents.main.allowlist[2]`), not WHAT it says.
+
+Each rule is a function `rule_<id>` (tests/test-permissions-policy.sh removes each one in a copy
+and checks that its planted case goes green). Paths: $DEVBRAIN_MC_DIR for the config directory,
+$DEVBRAIN_EXEC_APPROVALS for the JSON file.
+"""
+import json
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "lib"))
+from config_path import config_dir  # noqa: E402
+
+CONFIG = os.environ.get("DEVBRAIN_MC_DIR") or config_dir(ROOT)
+EXEC = os.environ.get("DEVBRAIN_EXEC_APPROVALS") or os.path.join(ROOT, "openclaw", "exec-approvals.json")
+WILDCARD = re.compile(r"[*?\[\]{}]")
+NOT_A_LIST = object()  # marker: an agent's allowlist is not a list
+
+
+def label(name, agents):
+    """Where an agent is, without naming it: the name is data and can be a key."""
+    return "agents.main" if name == "main" else f"agents[{list(agents).index(name)}]"
+
+
+def repos_of(path):
+    """[(line number, repo)]: the first field of each non-comment line. None if the file cannot be read."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = [(i, l.split("#")[0].split()) for i, l in enumerate(f, 1)]
+    except (OSError, ValueError):
+        return None
+    return [(i, w[0]) for i, w in rows if w]
+
+
+def norm(repo):
+    """Same repo even if the case differs or a trailing slash is added."""
+    return repo.strip().rstrip("/").lower()
+
+
+# ---- projects.allow / .excluded ---------------------------------------------------------------------
+
+def rule_p_duplicate(allowed, excluded):
+    out = []
+    for name, items in (("devbrain-projects.allow", allowed), ("devbrain-projects.excluded", excluded)):
+        seen = set()
+        for n, r in items:
+            if norm(r) in seen:
+                out.append(f"{name} line {n}: duplicate repo (compared without case or trailing slash)")
+            seen.add(norm(r))
+    return out
+
+
+def rule_p_both(allowed, excluded):
+    ex = {norm(r) for _, r in excluded}
+    return [f"devbrain-projects.allow line {n}: the repo is also in devbrain-projects.excluded"
+            for n, r in allowed if norm(r) in ex]
+
+
+# ---- openclaw/exec-approvals.json -------------------------------------------------------------------
+
+def load_json(path):
+    """(data, problem): data is None when there is no way to go on."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return None, "missing file"
+    except ValueError:
+        return None, "unreadable or truncated JSON"
+    except OSError:
+        return None, "cannot be read"
+    return (d, "") if isinstance(d, dict) else (None, "the root is not a JSON object")
+
+
+def rule_e_json(problem):
+    return [problem] if problem else []
+
+
+def rule_e_version(d):
+    v = d.get("version")
+    return [] if type(v) is int and v == 1 else ["version is not 1 (OpenClaw treats the file as broken and runs with full security)"]
+
+
+def rule_e_main(agents):
+    out = [] if "main" in agents else ["agents.main is missing"]
+    for name, a in agents.items():
+        if not isinstance(a, dict):
+            out.append(f"{label(name, agents)} is not an object")
+        elif a.get("security") != "allowlist":
+            out.append(f"{label(name, agents)}.security is not allowlist")
+    return out
+
+
+def rule_e_defaults(d):
+    df = d.get("defaults")
+    return [] if isinstance(df, dict) and df.get("security") == "deny" else ["defaults.security is not deny"]
+
+
+def patterns(agents):
+    """[(where, pattern or None)]: None if the entry has no text pattern, NOT_A_LIST if the allowlist is no list."""
+    out = []
+    for name, a in agents.items():
+        al = a.get("allowlist", []) if isinstance(a, dict) else []
+        if not isinstance(al, list):
+            out.append((f"{label(name, agents)}.allowlist", NOT_A_LIST))
+            continue
+        out += [(f"{label(name, agents)}.allowlist[{i}]",
+                 e.get("pattern") if isinstance(e, dict) and isinstance(e.get("pattern"), str) else None)
+                for i, e in enumerate(al)]
+    return out
+
+
+def rule_e_form(agents):
+    out = []
+    for where, p in patterns(agents):
+        if p is NOT_A_LIST:
+            out.append(f"{where} is not a list")
+        elif p is None:
+            out.append(f"{where} has no text pattern")
+    return out
+
+
+def rule_e_wildcard(agents):
+    return [f"{where}: the pattern has a wildcard" for where, p in patterns(agents)
+            if isinstance(p, str) and WILDCARD.search(p)]
+
+
+def rule_e_absolute(agents):
+    return [f"{where}: the pattern is not an absolute path (/... or ~/...)" for where, p in patterns(agents)
+            if isinstance(p, str) and not (p.startswith("/") or p.startswith("~/"))]
+
+
+# ---- the check ----------------------------------------------------------------------------------------
+
+def run(f, *args):
+    """A rule that crashes is a problem, not a green. The message is not printed: it may carry values."""
+    try:
+        return f(*args)
+    except Exception as e:
+        return [f"rule {f.__name__} could not run ({type(e).__name__})"]
+
+
+def check():
+    problems, warnings = [], []
+
+    def note(file, msgs):
+        problems.extend(f"permissions: {file}: {m}" for m in msgs)
+
+    allowed = repos_of(os.path.join(CONFIG, "devbrain-projects.allow"))
+    excluded = repos_of(os.path.join(CONFIG, "devbrain-projects.excluded"))
+    if allowed is None:
+        note("devbrain-projects.allow", ["missing or unreadable"])
+    if excluded is None:
+        note("devbrain-projects.excluded", ["missing or unreadable"])
+    if allowed is not None and excluded is not None:
+        note("config", run(rule_p_duplicate, allowed, excluded) + run(rule_p_both, allowed, excluded))
+
+    d, err = load_json(EXEC)
+    prob = run(rule_e_json, err)
+    if d is not None:
+        agents = d.get("agents")
+        if isinstance(agents, dict):
+            prob += run(rule_e_main, agents) + run(rule_e_form, agents) \
+                + run(rule_e_wildcard, agents) + run(rule_e_absolute, agents)
+        else:
+            prob.append("agents is not an object")
+        prob += run(rule_e_version, d) + run(rule_e_defaults, d)
+    note("exec-approvals.json", prob)
+    return problems, warnings
+
+
+def main(argv):
+    if argv[1:] != ["check"]:
+        print("usage: devbrain-permissions check", file=sys.stderr)
+        return 2
+    try:
+        problems, warnings = check()
+    except Exception as e:  # no traceback: one line saying it could not finish (the type only, never the message)
+        problems, warnings = [f"permissions: validator could not finish ({type(e).__name__})"], []
+    for l in problems + warnings:
+        print(l)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

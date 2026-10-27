@@ -24,7 +24,7 @@ setup() { # leaves a clean, valid scenario in $T
   # demo declares a plain `npm test`: --check now reviews it, so the test repo has to satisfy it.
   printf "package.json\nnode_modules/\n" >> "$T/projects/demo/.git/info/exclude"
   printf '{"scripts":{"test":"true"}}\n' > "$T/projects/demo/package.json"; mkdir "$T/projects/demo/node_modules"
-  printf 'demo\n' > "$T/config/devbrain-projects.allow"
+  printf 'demo\n' > "$T/config/devbrain-projects.allow"; : > "$T/config/devbrain-projects.excluded"
   printf 'demo=npm test\n' > "$T/config/devbrain-verify.commands"
   printf -- '---\nrepo: demo\nstatus: approved\nprioridad: 10\ncreado: 2026-09-14\naprobado: 2026-09-14\n---\n\nA test task.\n' > "$T/queue/10-demo--task.plan.md"
 }
