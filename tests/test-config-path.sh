@@ -40,7 +40,8 @@ ck "devbrain: config/devbrain-projects.allow is the allowlist (rc=$rc)" '[ $rc =
 
 # --- bin/devbrain-preflight: reads config/ next to itself ------------------------
 P="$T/pf"; mkdir -p "$P/bin" "$P/lib" "$P/config" "$P/queue" "$P/projects/demo"
-cp "$DIR/bin/devbrain-preflight" "$DIR/bin/devbrain-verify-run" "$P/bin/"; cp "$DIR"/lib/*.py "$P/lib/"
+cp "$DIR/bin/devbrain-preflight" "$DIR/bin/devbrain-verify-run" "$DIR/bin/devbrain-permissions" "$P/bin/"; cp "$DIR"/lib/*.py "$P/lib/"
+mkdir "$P/openclaw"; cp "$DIR/openclaw/exec-approvals.json" "$P/openclaw/"; : > "$P/config/devbrain-projects.excluded"  # the preflight validates these
 git -C "$P/projects/demo" init -q
 git -C "$P/projects/demo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 # demo declares a plain `npm test`: --check reviews it, so the test repo has to satisfy it.
