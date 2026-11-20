@@ -1,0 +1,85 @@
+#!/bin/bash
+# devbrain-close-merged — marks queue plans `done` when their PR is already merged.
+#
+# A plan in approved/blocked/failed/running whose `pr:` points at a MERGED PR moves to `done`, with a
+# commit `queue: done <plan> -> <url> (PR merged)`. devbrain-night calls it before each run. Without
+# it, a plan whose PR got merged by hand keeps showing up as pending work.
+#
+# `pr:` is a PR URL, or a bare number ("42") resolved with `gh` in the checkout of the plan's `repo:`
+# ($DEVBRAIN_PROJECTS_DIR/<repo>). It never guesses: it does not close (and says so) when
+#   - the PR is open, or closed without merge;
+#   - `gh` fails or answers something unreadable (fails closed; rc 2);
+#   - the number can't be resolved: no valid `repo:`, no checkout, or the PR belongs to another repo;
+#   - `pr:` is neither a URL nor a single number (e.g. "333, 334, 335");
+#   - the plan has `rama:` and the PR comes from another branch.
+# Takes the queue lock ($QUEUE_DIR/.night.lock, the runner's) without waiting: if it's held, it does
+# nothing. With the lock in hand no runner is alive, so a `running` plan is a dead runner's.
+# Takes no arguments: any argument (even --help) exits before touching the queue.
+#
+# OUTPUT: one line per closed or skipped plan; the LAST line is the summary.
+# rc 0 = checked everything; rc 2 = gh failed on some plan or the queue conflicts with origin.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/lib/queue.sh"   # fm_get, fm_set, with_timeout, queue_sync_from_origin, queue_commit_and_push
+QUEUE_DIR="${DEVBRAIN_QUEUE_DIR:-$HOME/dev/queue}"
+PROJECTS_DIR="${DEVBRAIN_PROJECTS_DIR:-$HOME/dev/projects}"
+GH="${DEVBRAIN_GH_BIN:-gh}"
+LOCK="$QUEUE_DIR/.night.lock"
+
+case "${1-}" in
+  "") ;;
+  -h|--help) echo "usage: devbrain-close-merged   (no arguments; writes to the queue)"; exit 0 ;;
+  *) echo "devbrain-close-merged: takes no arguments ('$1'); nothing closed" >&2; exit 64 ;;
+esac
+
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "queue lock held ($LOCK): a plan is running; nothing closed this time"
+  exit 0
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+if ! queue_sync_from_origin "$QUEUE_DIR"; then
+  echo "the queue conflicts with origin (merge conflict); nothing closed"
+  exit 2
+fi
+
+closed=0; gh_bad=0; unresolved=0
+skip() { echo "$1 not closed -- $2"; unresolved=$((unresolved + 1)); }
+lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+for f in "$QUEUE_DIR"/*.plan.md; do
+  [ -e "$f" ] || continue
+  st="$(fm_get "$f" status)"
+  case "$st" in approved|blocked|failed|running) ;; *) continue ;; esac
+  pr="$(fm_get "$f" pr)"; [ -n "$pr" ] || continue
+  base="$(basename "$f")"; repo="$(fm_get "$f" repo)"; dir="$QUEUE_DIR"; num=""
+  if [[ "$pr" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+$ ]]; then
+    ref="$pr"
+  elif [[ "$pr" =~ ^#?[0-9]+$ ]]; then
+    num="${pr#\#}"; ref="$num"; dir="$PROJECTS_DIR/$repo"
+    [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { skip "$base" "pr: $pr is a number and the plan has no valid repo:"; continue; }
+    [ -e "$dir/.git" ] || { skip "$base" "pr: $pr is a number and there is no checkout of $repo to resolve it"; continue; }
+  else
+    skip "$base" "pr: '$pr' is neither a PR URL nor a single number"; continue
+  fi
+  out="$( (cd "$dir" && with_timeout 60 "$GH" pr view "$ref" --json state,url,headRefName < /dev/null) 2>&1)" \
+    || { gh_bad=$((gh_bad + 1)); echo "$base not closed -- gh failed: $(printf '%s\n' "$out" | tail -1 | cut -c1-160)"; continue; }
+  row="$(printf '%s' "$out" | python3 -I -c 'import json,sys; d=json.load(sys.stdin); print(d["state"] + "\t" + d["url"] + "\t" + (d.get("headRefName") or ""))' 2>/dev/null)" \
+    || { gh_bad=$((gh_bad + 1)); echo "$base not closed -- gh answered something unreadable"; continue; }
+  IFS=$'\t' read -r state url pr_branch <<< "$row"
+  if [ -n "$num" ]; then   # resolved in repo:'s checkout; the PR must belong to that repo
+    [ "$(lc "$(printf '%s' "$url" | cut -d/ -f5)")" = "$(lc "$repo")" ] && [[ "$url" == */pull/"$num" ]] \
+      || { skip "$base" "pr: $pr resolved to $url, which is not from repo $repo"; continue; }
+  fi
+  branch="$(fm_get "$f" rama)"
+  [ -z "$branch" ] || [ "$branch" = "$pr_branch" ] || { skip "$base" "its branch is $branch and PR $url is from $pr_branch"; continue; }
+  [ "$state" = MERGED ] || continue
+  # Queue contract: `done` carries `pr:`, written before the status.
+  { [ -z "$num" ] || fm_set "$f" pr "$url"; } && fm_set "$f" status done \
+    || { skip "$base" "could not write the plan"; continue; }
+  queue_commit_and_push "$QUEUE_DIR" "queue: done $base -> $url (PR merged)"
+  echo "$base closed -- $url merged (was $st)"
+  closed=$((closed + 1))
+done
+echo "plans with a merged PR closed $closed; gh failed on $gh_bad; unresolved $unresolved"
+[ "$gh_bad" -eq 0 ] || exit 2
+exit 0

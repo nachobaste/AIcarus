@@ -31,6 +31,11 @@ if ! in_window; then
   echo "Outside the night window (23:00-06:00). Use DEVBRAIN_NIGHT_FORCE=1 to force."; exit 0
 fi
 
+# Close plans whose PR is already merged, before picking work. It takes .night.lock itself, so it
+# runs before this script takes it; its rc 2 (gh down) is logged, never fatal.
+CLOSE_MERGED="${DEVBRAIN_CLOSE_MERGED_BIN:-$ROOT/bin/devbrain-close-merged}"
+log "close-merged: $("$CLOSE_MERGED" 2>&1 | tail -1)"
+
 # Single-instance lock: a manual/forced run and the scheduled run must never
 # overlap (they'd race on the queue and on each project's .devbrain staging).
 # mkdir is atomic; the lock lives with the queue it guards.
